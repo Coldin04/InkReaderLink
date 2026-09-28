@@ -1,4 +1,6 @@
-use crate::{Capability, capability::ids as capability};
+use crate::{
+    Capability, DeviceConstraints, DeviceDefinition, DeviceFileFormats, built_in_definition,
+};
 
 pub const READ_PICO_DEVICE_TYPE: &str = "read-pico";
 pub const CROSSPOINT_DEVICE_TYPE: &str = "crosspoint";
@@ -21,6 +23,8 @@ pub enum DeviceKind {
 pub struct DeviceProfile {
     pub identity: DeviceIdentity,
     pub capabilities: Vec<Capability>,
+    pub constraints: DeviceConstraints,
+    pub file_formats: DeviceFileFormats,
 }
 
 #[must_use]
@@ -35,44 +39,22 @@ pub fn route_device(device_type: &str) -> Option<DeviceKind> {
 impl DeviceProfile {
     #[must_use]
     pub fn baseline(kind: DeviceKind) -> Self {
-        let (device_type, capability_ids): (&str, &[&str]) = match kind {
-            DeviceKind::ReadPico => (
-                READ_PICO_DEVICE_TYPE,
-                &[
-                    capability::FILE_LIST,
-                    capability::FILE_UPLOAD,
-                    capability::FILE_DELETE,
-                    capability::UPLOAD_EXPLICIT_OVERWRITE,
-                    capability::WIFI_MANAGE,
-                ],
-            ),
-            DeviceKind::CrossPoint => (
-                CROSSPOINT_DEVICE_TYPE,
-                &[
-                    capability::FILE_LIST,
-                    capability::FILE_UPLOAD,
-                    capability::FILE_DELETE,
-                    capability::FILE_DOWNLOAD,
-                    capability::FILE_RENAME,
-                    capability::FILE_MOVE,
-                    capability::DIRECTORY_CREATE,
-                    capability::UPLOAD_WEBSOCKET,
-                    capability::WIFI_MANAGE,
-                ],
-            ),
-        };
+        Self::from_definition(built_in_definition(kind))
+    }
 
+    #[must_use]
+    pub fn from_definition(mut definition: DeviceDefinition) -> Self {
+        definition.ensure_upload_capability();
         Self {
             identity: DeviceIdentity {
-                device_type: device_type.to_owned(),
+                device_type: definition.device_type,
                 device_id: None,
                 firmware_version: None,
                 protocol_version: None,
             },
-            capabilities: capability_ids
-                .iter()
-                .map(|id| Capability::new(*id))
-                .collect(),
+            capabilities: definition.capabilities,
+            constraints: definition.constraints,
+            file_formats: definition.file_formats,
         }
     }
 }
@@ -80,6 +62,7 @@ impl DeviceProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::ids;
 
     #[test]
     fn routes_known_devices_without_exposing_adapter_types() {
@@ -93,8 +76,38 @@ mod tests {
         let profile = DeviceProfile::baseline(DeviceKind::CrossPoint);
         let ids: Vec<_> = profile.capabilities.iter().map(Capability::id).collect();
 
-        assert!(ids.contains(&capability::FILE_UPLOAD));
-        assert!(ids.contains(&capability::FILE_RENAME));
-        assert!(ids.contains(&capability::UPLOAD_WEBSOCKET));
+        assert!(ids.contains(&ids::FILE_UPLOAD));
+        assert!(ids.contains(&ids::FILE_RENAME));
+        assert!(ids.contains(&ids::UPLOAD_WEBSOCKET));
+        assert!(profile.constraints.can_list_directories);
+        assert!(profile.constraints.can_choose_upload_directory);
+        assert!(profile.file_formats.accepts_any_upload_format);
+        assert!(
+            profile
+                .file_formats
+                .readable_extensions
+                .contains(&"xtc".to_owned())
+        );
+    }
+
+    #[test]
+    fn read_pico_restricts_file_operations_to_its_active_root() {
+        let profile = DeviceProfile::baseline(DeviceKind::ReadPico);
+
+        assert!(!profile.constraints.can_list_directories);
+        assert!(!profile.constraints.can_choose_upload_directory);
+        assert!(!profile.file_formats.accepts_any_upload_format);
+        assert_eq!(profile.file_formats.upload_extensions, ["epub", "txt"]);
+    }
+
+    #[test]
+    fn profile_restores_the_required_upload_capability() {
+        let mut definition = built_in_definition(DeviceKind::ReadPico);
+        definition.capabilities.clear();
+
+        let profile = DeviceProfile::from_definition(definition);
+
+        assert_eq!(profile.capabilities.len(), 1);
+        assert_eq!(profile.capabilities[0].id(), ids::FILE_UPLOAD);
     }
 }

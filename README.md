@@ -26,11 +26,17 @@ SDK 负责设备发现、设备能力识别、文件传输和文件管理。上�
 │   │       │   ├── read_pico.rs   # Read Pico 协议 adapter
 │   │       │   └── mod.rs
 │   │       ├── capability.rs      # 能力声明模型
+│   │       ├── config.rs          # 设备能力、约束和格式配置
+│   │       ├── client.rs          # 统一设备操作与 capability 门控
 │   │       ├── device.rs          # 设备类型与路由
+│   │       ├── model.rs           # 通用文件、上传和错误模型
+│   │       ├── transport.rs       # 流式 HTTP/WebSocket transport
 │   │       └── lib.rs
 │   └── booksend-ffi/
 │       └── src/lib.rs             # UniFFI 对外接口
-├── docs/research/                 # 上游协议与技术选型调研
+├── docs/
+│   ├── research/                  # 上游协议与技术选型调研
+│   └── sdk/                       # SDK 对外接口约定
 ├── AGENTS.md                      # 项目开发约束
 ├── Cargo.toml
 └── LICENSE
@@ -39,6 +45,8 @@ SDK 负责设备发现、设备能力识别、文件传输和文件管理。上�
 ## 设计原则
 
 - 上层根据能力声明决定是否展示可选功能。
+- 上传是最低能力，其余能力均由设备定义按需配置。
+- 文件格式声明集中在设备定义中；SDK 不负责格式转换。
 - 固件 endpoint、请求格式和错误语义只在对应 adapter 内处理。
 - 文件传输采用流式处理；设备修改操作串行执行。
 - 对外接口和返回模型尽量设备无关、统一、通用。
