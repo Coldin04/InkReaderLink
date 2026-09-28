@@ -1,0 +1,7 @@
+/target/
+/tmp/
+/.tmp/
+*.tmp
+*.xcframework.zip
+*.aar
+.DS_Store

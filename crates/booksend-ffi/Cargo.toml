@@ -1,0 +1,19 @@
+[package]
+name = "booksend-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+booksend-core = { path = "../booksend-core" }
+uniffi = "0.32.2"
+
+[lints]
+workspace = true
+
