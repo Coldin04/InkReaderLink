@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, SdkError, UploadOptions,
-    UploadResult, WifiCredential, WifiNetwork,
+    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
     adapters::{crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter},
     capability::ids,
     model::ConflictPolicy,
@@ -76,6 +76,7 @@ impl DeviceClient {
         file_name: String,
         location: FileLocation,
         options: UploadOptions,
+        progress: Option<Arc<dyn UploadProgressSink>>,
     ) -> Result<UploadResult, SdkError> {
         self.require(ids::FILE_UPLOAD)?;
         validate_file_name(&file_name)?;
@@ -101,7 +102,7 @@ impl DeviceClient {
                 false
             }
             DeviceKind::CrossPoint => {
-                self.upload_crosspoint(&local_path, &file_name, &location, &options)
+                self.upload_crosspoint(&local_path, &file_name, &location, &options, progress)
                     .await?
             }
         };
@@ -331,6 +332,7 @@ impl DeviceClient {
         file_name: &str,
         location: &FileLocation,
         options: &UploadOptions,
+        progress: Option<Arc<dyn UploadProgressSink>>,
     ) -> Result<bool, SdkError> {
         match options.conflict_policy {
             ConflictPolicy::OverwriteWhenSupported => {
@@ -341,7 +343,7 @@ impl DeviceClient {
             ConflictPolicy::ReplaceWithBackup => {
                 self.require(ids::UPLOAD_BACKUP_REPLACE)?;
                 return self
-                    .crosspoint_backup_replace(local_path, file_name, location, options)
+                    .crosspoint_backup_replace(local_path, file_name, location, options, progress)
                     .await;
             }
             ConflictPolicy::Fail => {
@@ -358,7 +360,7 @@ impl DeviceClient {
             }
         }
 
-        self.send_crosspoint_upload(local_path, file_name, location, options)
+        self.send_crosspoint_upload(local_path, file_name, location, options, progress)
             .await
     }
 
@@ -368,6 +370,7 @@ impl DeviceClient {
         file_name: &str,
         location: &FileLocation,
         options: &UploadOptions,
+        progress: Option<Arc<dyn UploadProgressSink>>,
     ) -> Result<bool, SdkError> {
         if options.prefer_websocket {
             self.require(ids::UPLOAD_WEBSOCKET)?;
@@ -376,6 +379,7 @@ impl DeviceClient {
                     file_path: local_path.to_path_buf(),
                     file_name: file_name.to_owned(),
                     destination: location_string(location),
+                    progress,
                 })
                 .await?;
             Ok(true)
@@ -400,6 +404,7 @@ impl DeviceClient {
         file_name: &str,
         location: &FileLocation,
         options: &UploadOptions,
+        progress: Option<Arc<dyn UploadProgressSink>>,
     ) -> Result<bool, SdkError> {
         let expected_size = tokio::fs::metadata(local_path)
             .await
@@ -409,7 +414,7 @@ impl DeviceClient {
         let old_exists = entries.iter().any(|entry| entry.name == file_name);
         if !old_exists {
             return self
-                .send_crosspoint_upload(local_path, file_name, location, options)
+                .send_crosspoint_upload(local_path, file_name, location, options, progress)
                 .await;
         }
 
@@ -428,7 +433,7 @@ impl DeviceClient {
         .await?;
 
         let used_websocket = match self
-            .send_crosspoint_upload(local_path, file_name, location, options)
+            .send_crosspoint_upload(local_path, file_name, location, options, progress)
             .await
         {
             Ok(used_websocket) => used_websocket,
@@ -768,6 +773,7 @@ mod tests {
                     content_type: None,
                     prefer_websocket: false,
                 },
+                None,
             )
             .await
             .unwrap();

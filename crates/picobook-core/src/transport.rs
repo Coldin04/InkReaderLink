@@ -1,16 +1,17 @@
 //! Internal HTTP and WebSocket transport.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Body, Client, Method, multipart};
-use tokio::{fs::File, io::AsyncWriteExt};
+use tokio::{fs::File, io::AsyncWriteExt, time::timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
 use crate::SdkError;
+use crate::UploadProgressSink;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HttpMethod {
@@ -70,11 +71,24 @@ impl HttpResponse {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct WebSocketUpload {
     pub file_path: PathBuf,
     pub file_name: String,
     pub destination: String,
+    pub progress: Option<Arc<dyn UploadProgressSink>>,
+}
+
+impl fmt::Debug for WebSocketUpload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WebSocketUpload")
+            .field("file_path", &self.file_path)
+            .field("file_name", &self.file_name)
+            .field("destination", &self.destination)
+            .field("progress", &self.progress.is_some())
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -255,16 +269,17 @@ impl Transport for ReqwestTransport {
             .await
             .map_err(map_file_error)?
             .len();
-        let (mut socket, _) = connect_async(self.websocket_url()?.as_str())
+        let (socket, _) = connect_async(self.websocket_url()?.as_str())
             .await
             .map_err(|_| SdkError::Unreachable)?;
-        socket
+        let (mut sender, mut receiver) = socket.split();
+        sender
             .send(Message::Text(
                 format!("START:{}:{size}:{}", upload.file_name, upload.destination).into(),
             ))
             .await
             .map_err(map_websocket_error)?;
-        expect_websocket_text(&mut socket, "READY").await?;
+        expect_websocket_text(&mut receiver, "READY").await?;
 
         let mut file = File::open(&upload.file_path)
             .await
@@ -277,14 +292,15 @@ impl Transport for ReqwestTransport {
             if read == 0 {
                 break;
             }
-            socket
+            sender
                 .send(Message::Binary(buffer[..read].to_vec().into()))
                 .await
                 .map_err(map_websocket_error)?;
+            drain_websocket_progress(&mut receiver, upload.progress.as_deref()).await?;
         }
 
         loop {
-            let message = socket
+            let message = receiver
                 .next()
                 .await
                 .ok_or_else(|| SdkError::RemoteFailure("WebSocket closed before DONE".to_owned()))?
@@ -293,12 +309,47 @@ impl Transport for ReqwestTransport {
                 if text == "DONE" {
                     return Ok(());
                 }
+                if let Some((sent, total)) = parse_progress(&text) {
+                    if let Some(progress) = upload.progress.as_deref() {
+                        progress.report(sent, total);
+                    }
+                }
                 if let Some(message) = text.strip_prefix("ERROR:") {
                     return Err(map_remote_message(message));
                 }
             }
         }
     }
+}
+
+async fn drain_websocket_progress<S>(
+    receiver: &mut S,
+    progress: Option<&dyn UploadProgressSink>,
+) -> Result<(), SdkError>
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    loop {
+        let next = timeout(Duration::from_millis(1), receiver.next()).await;
+        let Ok(Some(message)) = next else {
+            return Ok(());
+        };
+        let message = message.map_err(map_websocket_error)?;
+        if let Message::Text(text) = message {
+            if let Some((sent, total)) = parse_progress(&text) {
+                if let Some(progress) = progress {
+                    progress.report(sent, total);
+                }
+            } else if let Some(error) = text.strip_prefix("ERROR:") {
+                return Err(map_remote_message(error));
+            }
+        }
+    }
+}
+
+fn parse_progress(text: &str) -> Option<(u64, u64)> {
+    let mut fields = text.strip_prefix("PROGRESS:")?.split(':');
+    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }
 
 async fn expect_websocket_text<S>(socket: &mut S, expected: &str) -> Result<(), SdkError>
@@ -368,5 +419,15 @@ mod tests {
     fn rejects_non_http_schemes() {
         let error = ReqwestTransport::new("ftp://192.168.4.1", Duration::from_secs(5));
         assert!(matches!(error, Err(SdkError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn parses_crosspoint_progress_messages() {
+        assert_eq!(
+            parse_progress("PROGRESS:65536:123456"),
+            Some((65_536, 123_456))
+        );
+        assert_eq!(parse_progress("DONE"), None);
+        assert_eq!(parse_progress("PROGRESS:bad:123456"), None);
     }
 }

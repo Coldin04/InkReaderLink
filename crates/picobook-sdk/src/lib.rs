@@ -5,10 +5,10 @@ use std::{
     time::Duration,
 };
 
-use booksend_core::{
+use picobook_core::{
     Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats, DeviceKind,
-    DeviceProfile, FileEntry, FileKind, FileLocation, SdkError, UploadOptions, UploadResult,
-    WifiCredential, WifiNetwork,
+    DeviceProfile, FileEntry, FileKind, FileLocation, SdkError, UploadOptions, UploadProgressSink,
+    UploadResult, WifiCredential, WifiNetwork,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -120,6 +120,21 @@ pub struct SdkWifiCredential {
     pub index: Option<u32>,
     pub ssid: String,
     pub password: Option<String>,
+}
+
+#[uniffi::export(foreign)]
+pub trait SdkUploadProgressObserver: Send + Sync {
+    fn on_progress(&self, sent_bytes: u64, total_bytes: u64);
+}
+
+struct FfiProgressSink {
+    observer: Arc<dyn SdkUploadProgressObserver>,
+}
+
+impl UploadProgressSink for FfiProgressSink {
+    fn report(&self, sent_bytes: u64, total_bytes: u64) {
+        self.observer.on_progress(sent_bytes, total_bytes);
+    }
 }
 
 impl From<SdkWifiCredential> for WifiCredential {
@@ -357,6 +372,7 @@ impl SdkDeviceClient {
         file_name: String,
         location: SdkFileLocation,
         options: SdkUploadOptions,
+        progress_observer: Option<Arc<dyn SdkUploadProgressObserver>>,
     ) -> Result<SdkUploadResult, SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move {
@@ -366,6 +382,9 @@ impl SdkDeviceClient {
                     file_name,
                     location.into(),
                     options.into(),
+                    progress_observer.map(|observer| {
+                        Arc::new(FfiProgressSink { observer }) as Arc<dyn UploadProgressSink>
+                    }),
                 )
                 .await
                 .map(Into::into)

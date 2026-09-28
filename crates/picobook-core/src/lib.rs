@@ -12,5 +12,5 @@ pub use config::{DeviceDefinition, built_in_definition};
 pub use device::{DeviceIdentity, DeviceKind, DeviceProfile, route_device};
 pub use model::{
     ConflictPolicy, DeviceConstraints, DeviceFileFormats, FileEntry, FileKind, FileLocation,
-    SdkError, UploadOptions, UploadResult, WifiCredential, WifiNetwork,
+    SdkError, UploadOptions, UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
 };

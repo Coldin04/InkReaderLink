@@ -5,7 +5,7 @@
 设备发现和识别完成后返回 `DeviceProfile`。上层应用应根据 capability 和
 constraint 渲染功能，不应根据设备类型硬编码界面。
 
-`booksend-core::config::DeviceDefinition` 是设备声明的统一配置入口。新增或调整
+`picobook_core::config::DeviceDefinition` 是设备声明的统一配置入口。新增或调整
 固件时，应在此处集中配置格式、约束和可选能力。`files.upload` 是所有受支持
 设备的最低能力，由 SDK 保证存在；文件列表、删除、下载、目录、重命名、移动、
 WebSocket 上传和 Wi-Fi 管理等能力均为可选配置。只支持上传的设备可直接使用
@@ -76,6 +76,10 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 上传通过 `UploadOptions` 明确冲突策略。CrossPoint 的 `ReplaceWithBackup` 会先
 将旧文件改名为 `<name>.back`，上传并按大小复核，成功后删除备份；失败时尝试
 恢复，恢复失败返回 `RecoveryFailed`。
+
+CrossPoint WebSocket 上传可传入 `SdkUploadProgressObserver`。固件每次返回
+`PROGRESS:<received>:<total>` 时，SDK 将真实的已接收字节数和总字节数回调给
+上层；HTTP 与 Read Pico 上传当前不承诺中途进度。
 
 连接入口接受裸 IPv4/hostname（SDK 自动补 `http://`）或完整 HTTP/HTTPS URL。
 二维码解析由原生 App 完成；Read Pico 网页码和 CrossPoint STA 网页码直接提供

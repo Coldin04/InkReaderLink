@@ -77,6 +77,10 @@ pub struct UploadResult {
     pub used_websocket: bool,
 }
 
+pub trait UploadProgressSink: Send + Sync {
+    fn report(&self, sent_bytes: u64, total_bytes: u64);
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SdkError {
     InvalidArgument(String),

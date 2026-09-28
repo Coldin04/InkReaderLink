@@ -1,6 +1,6 @@
-# Fast Booksend SDK
+# PicoBook SDK
 
-Fast Booksend SDK 是使用 Rust 编写的局域网阅读设备 SDK，通过 UniFFI 为
+PicoBook SDK（Rust crate：`picobook_sdk`）是使用 Rust 编写的局域网阅读设备 SDK，通过 UniFFI 为
 iOS 和 Android 提供调用接口。
 
 SDK 负责设备发现、设备能力识别、文件传输和文件管理。上层应用主要负责
@@ -19,7 +19,7 @@ SDK 负责设备发现、设备能力识别、文件传输和文件管理。上�
 ```text
 .
 ├── crates/
-│   ├── booksend-core/
+│   ├── picobook-core/
 │   │   └── src/
 │   │       ├── adapters/
 │   │       │   ├── crosspoint.rs  # CrossPoint 协议 adapter
@@ -32,7 +32,7 @@ SDK 负责设备发现、设备能力识别、文件传输和文件管理。上�
 │   │       ├── model.rs           # 通用文件、上传和错误模型
 │   │       ├── transport.rs       # 流式 HTTP/WebSocket transport
 │   │       └── lib.rs
-│   └── booksend-ffi/
+│   └── picobook-sdk/
 │       └── src/lib.rs             # UniFFI 对外接口
 ├── docs/
 │   ├── research/                  # 上游协议与技术选型调研
