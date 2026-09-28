@@ -149,43 +149,43 @@ impl From<SdkWifiCredential> for WifiCredential {
 
 #[derive(Clone, Debug, uniffi::Error, thiserror::Error)]
 pub enum SdkOperationError {
-    #[error("{message}")]
-    InvalidArgument { message: String },
-    #[error("{message}")]
-    Unsupported { message: String },
+    #[error("{detail}")]
+    InvalidArgument { detail: String },
+    #[error("{detail}")]
+    Unsupported { detail: String },
     #[error("device unreachable")]
     Unreachable,
     #[error("operation timed out")]
     Timeout,
-    #[error("{message}")]
-    Conflict { message: String },
+    #[error("{detail}")]
+    Conflict { detail: String },
     #[error("insufficient storage")]
     InsufficientStorage,
-    #[error("{message}")]
-    RemoteFailure { message: String },
-    #[error("{message}")]
-    CommittedWithWarning { message: String },
-    #[error("{message}")]
-    CommittedButCleanupFailed { message: String },
-    #[error("{message}")]
-    RecoveryFailed { message: String },
+    #[error("{detail}")]
+    RemoteFailure { detail: String },
+    #[error("{detail}")]
+    CommittedWithWarning { detail: String },
+    #[error("{detail}")]
+    CommittedButCleanupFailed { detail: String },
+    #[error("{detail}")]
+    RecoveryFailed { detail: String },
 }
 
 impl From<SdkError> for SdkOperationError {
     fn from(error: SdkError) -> Self {
         match error {
-            SdkError::InvalidArgument(message) => Self::InvalidArgument { message },
-            SdkError::Unsupported(message) => Self::Unsupported { message },
+            SdkError::InvalidArgument(detail) => Self::InvalidArgument { detail },
+            SdkError::Unsupported(detail) => Self::Unsupported { detail },
             SdkError::Unreachable => Self::Unreachable,
             SdkError::Timeout => Self::Timeout,
-            SdkError::Conflict(message) => Self::Conflict { message },
+            SdkError::Conflict(detail) => Self::Conflict { detail },
             SdkError::InsufficientStorage => Self::InsufficientStorage,
-            SdkError::RemoteFailure(message) => Self::RemoteFailure { message },
-            SdkError::CommittedWithWarning(message) => Self::CommittedWithWarning { message },
-            SdkError::CommittedButCleanupFailed(message) => {
-                Self::CommittedButCleanupFailed { message }
+            SdkError::RemoteFailure(detail) => Self::RemoteFailure { detail },
+            SdkError::CommittedWithWarning(detail) => Self::CommittedWithWarning { detail },
+            SdkError::CommittedButCleanupFailed(detail) => {
+                Self::CommittedButCleanupFailed { detail }
             }
-            SdkError::RecoveryFailed(message) => Self::RecoveryFailed { message },
+            SdkError::RecoveryFailed(detail) => Self::RecoveryFailed { detail },
         }
     }
 }
@@ -301,7 +301,7 @@ where
         .spawn(future)
         .await
         .map_err(|error| SdkOperationError::RemoteFailure {
-            message: format!("SDK task failed: {error}"),
+            detail: format!("SDK task failed: {error}"),
         })?
         .map_err(Into::into)
 }
@@ -325,7 +325,7 @@ impl SdkDeviceClient {
             "crosspoint" => DeviceKind::CrossPoint,
             _ => {
                 return Err(SdkOperationError::Unsupported {
-                    message: format!("unknown device type: {device_type}"),
+                    detail: format!("unknown device type: {device_type}"),
                 });
             }
         };
