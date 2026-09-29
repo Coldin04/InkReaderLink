@@ -1,0 +1,3 @@
+-keep class uniffi.picobook_sdk.** { *; }
+-keep class com.sun.jna.** { *; }
+-dontwarn java.awt.**
