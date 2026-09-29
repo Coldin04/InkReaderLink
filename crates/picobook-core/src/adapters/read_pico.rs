@@ -35,6 +35,49 @@ impl ReadPicoAdapter {
         HttpRequest::new(HttpMethod::Get, "/info")
     }
 
+    /// Checks that a response has the stable Read Pico `/info` fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response is not a Read Pico info document.
+    pub fn validate_info(body: &[u8]) -> Result<(), SdkError> {
+        let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid Read Pico device info: {error}"))
+        })?;
+        let valid = info.is_object()
+            && info
+                .get("is_flash")
+                .and_then(serde_json::Value::as_bool)
+                .is_some()
+            && info
+                .get("free_bytes")
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+            && info
+                .get("file_limit")
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+            && info
+                .get("mode")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+            && info
+                .get("wifi_configured")
+                .and_then(serde_json::Value::as_bool)
+                .is_some()
+            && info
+                .get("root")
+                .and_then(serde_json::Value::as_str)
+                .is_some();
+        if valid {
+            Ok(())
+        } else {
+            Err(SdkError::RemoteFailure(
+                "invalid Read Pico device info: required fields are missing".to_owned(),
+            ))
+        }
+    }
+
     #[must_use]
     pub fn list_request(page: usize) -> HttpRequest {
         let mut request = HttpRequest::new(HttpMethod::Get, "/books");

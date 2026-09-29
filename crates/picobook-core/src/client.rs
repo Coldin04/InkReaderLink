@@ -7,11 +7,13 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
-    DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, SdkError, UploadOptions,
-    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
+    DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog, OpdsCredential,
+    OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions, UploadProgressSink,
+    UploadResult, WifiCredential, WifiNetwork,
     adapters::{crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter},
     capability::ids,
     model::ConflictPolicy,
+    settings::{encode_changes, parse_settings},
     transport::{HttpResponse, ReqwestTransport, SharedTransport, WebSocketUpload},
 };
 
@@ -47,6 +49,24 @@ impl DeviceClient {
     #[must_use]
     pub fn profile(&self) -> &DeviceProfile {
         &self.profile
+    }
+
+    /// Verifies the HTTP origin using the selected device's information endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns transport, HTTP, or device response errors.
+    pub async fn verify_connection(&self) -> Result<(), SdkError> {
+        let request = match self.kind {
+            DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
+            DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
+        };
+        let response = self.transport.execute(request).await?;
+        ensure_success(&response, "verify device connection")?;
+        match self.kind {
+            DeviceKind::ReadPico => ReadPicoAdapter::validate_info(&response.body),
+            DeviceKind::CrossPoint => CrossPointAdapter::validate_status(&response.body),
+        }
     }
 
     /// Lists files at a supported location.
@@ -261,6 +281,159 @@ impl DeviceClient {
             }
         };
         self.execute_success(request, "delete Wi-Fi network").await
+    }
+
+    /// Lists installed SD-card font families.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_fonts(&self) -> Result<FontCatalog, SdkError> {
+        self.require(ids::FONTS_LIST)?;
+        let response = self
+            .transport
+            .execute(CrossPointAdapter::fonts_list_request())
+            .await?;
+        ensure_success(&response, "list fonts")?;
+        CrossPointAdapter::parse_font_catalog(&response.text_lossy())
+    }
+
+    /// Streams a `.cpfont` file into an SD-card font family.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font(
+        &self,
+        family: String,
+        local_path: PathBuf,
+        file_name: String,
+    ) -> Result<(), SdkError> {
+        self.require(ids::FONTS_UPLOAD)?;
+        validate_font_family(&family)?;
+        validate_file_name(&file_name)?;
+        if !file_name.to_ascii_lowercase().ends_with(".cpfont") {
+            return Err(SdkError::InvalidArgument(
+                "font file must have a .cpfont extension".to_owned(),
+            ));
+        }
+        if tokio::fs::metadata(&local_path)
+            .await
+            .map_err(|error| SdkError::InvalidArgument(format!("cannot read font file: {error}")))?
+            .len()
+            == 0
+        {
+            return Err(SdkError::InvalidArgument(
+                "font file must not be empty".to_owned(),
+            ));
+        }
+        let _guard = self.mutation.lock().await;
+        self.execute_success(
+            CrossPointAdapter::font_upload_request(&family, local_path, file_name),
+            "upload font",
+        )
+        .await
+    }
+
+    /// Deletes an installed font family.
+    /// # Errors
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn delete_font_family(&self, family: String) -> Result<(), SdkError> {
+        self.require(ids::FONTS_DELETE)?;
+        validate_font_family(&family)?;
+        let _guard = self.mutation.lock().await;
+        self.execute_success(
+            CrossPointAdapter::font_delete_request(&family)?,
+            "delete font family",
+        )
+        .await
+    }
+
+    /// Lists saved OPDS servers without passwords.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_opds_servers(&self) -> Result<Vec<OpdsServer>, SdkError> {
+        self.require(ids::OPDS_LIST)?;
+        let response = self
+            .transport
+            .execute(CrossPointAdapter::opds_list_request())
+            .await?;
+        ensure_success(&response, "list OPDS servers")?;
+        CrossPointAdapter::parse_opds_list(&response.text_lossy())
+    }
+
+    /// Adds or updates an OPDS server. Omitted password preserves it on update.
+    /// # Errors
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn save_opds_server(&self, credential: OpdsCredential) -> Result<(), SdkError> {
+        self.require(ids::OPDS_SAVE)?;
+        if credential.name.trim().is_empty() || credential.url.trim().is_empty() {
+            return Err(SdkError::InvalidArgument(
+                "OPDS name and URL must not be empty".to_owned(),
+            ));
+        }
+        let _guard = self.mutation.lock().await;
+        self.execute_success(
+            CrossPointAdapter::opds_save_request(&credential)?,
+            "save OPDS server",
+        )
+        .await
+    }
+
+    /// Deletes a saved OPDS server by index.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn delete_opds_server(&self, index: u32) -> Result<(), SdkError> {
+        self.require(ids::OPDS_DELETE)?;
+        let _guard = self.mutation.lock().await;
+        self.execute_success(
+            CrossPointAdapter::opds_delete_request(index)?,
+            "delete OPDS server",
+        )
+        .await
+    }
+
+    /// Returns the current editable settings and metadata needed to render their controls.
+    ///
+    /// # Errors
+    /// Returns capability, transport, or malformed response errors.
+    pub async fn list_settings(&self) -> Result<SettingsSnapshot, SdkError> {
+        self.require(ids::SETTINGS_LIST)?;
+        self.read_settings().await
+    }
+
+    /// Applies a partial update only if the setting descriptors have not changed.
+    ///
+    /// # Errors
+    /// Returns capability, conflict, validation, transport, or protocol errors.
+    pub async fn apply_settings(
+        &self,
+        expected: SettingsSnapshot,
+        changes: Vec<SettingChange>,
+    ) -> Result<SettingsSnapshot, SdkError> {
+        self.require(ids::SETTINGS_UPDATE)?;
+        self.require(ids::SETTINGS_LIST)?;
+        let _guard = self.mutation.lock().await;
+        let current = self.read_settings().await?;
+        if current != expected {
+            return Err(SdkError::Conflict(
+                "settings changed; reload before saving".to_owned(),
+            ));
+        }
+        let body = encode_changes(&current, &changes)?;
+        self.execute_success(
+            CrossPointAdapter::settings_update_request(body),
+            "update settings",
+        )
+        .await?;
+        self.read_settings().await.map_err(|error| {
+            SdkError::CommittedWithWarning(format!("settings applied but refresh failed: {error}"))
+        })
+    }
+
+    async fn read_settings(&self) -> Result<SettingsSnapshot, SdkError> {
+        let response = self
+            .transport
+            .execute(CrossPointAdapter::settings_list_request())
+            .await?;
+        ensure_success(&response, "list settings")?;
+        parse_settings(&response.body)
     }
 
     async fn list_read_pico(&self, location: FileLocation) -> Result<Vec<FileEntry>, SdkError> {
@@ -606,6 +779,16 @@ fn validate_file_name(name: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
+fn validate_font_family(family: &str) -> Result<(), SdkError> {
+    validate_file_name(family)?;
+    if family.trim() != family || family.starts_with('.') {
+        return Err(SdkError::InvalidArgument(
+            "invalid font family name".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_remote_path(path: &str) -> Result<(), SdkError> {
     if !path.starts_with('/') || path.contains("/../") || path.ends_with("/..") {
         return Err(SdkError::InvalidArgument(
@@ -780,5 +963,68 @@ mod tests {
 
         assert_eq!(result.entry.path, "/Books/book.epub");
         assert_eq!(transport.request_count(), 5);
+    }
+
+    #[tokio::test]
+    async fn settings_reject_stale_snapshot_before_post() {
+        let old = r#"[{"key":"fontSize","name":"Font size","category":"Reader","type":"enum","value":0,"options":["12 pt","14 pt"]}]"#;
+        let changed = r#"[{"key":"fontSize","name":"Font size","category":"Reader","type":"enum","value":0,"options":["10 pt","12 pt"]}]"#;
+        let transport = MockTransport::new(vec![response(200, old), response(200, changed)]);
+        let client = DeviceClient::with_transport(DeviceKind::CrossPoint, transport.clone());
+        let snapshot = client.list_settings().await.unwrap();
+        let result = client
+            .apply_settings(
+                snapshot,
+                vec![SettingChange {
+                    key: "fontSize".to_owned(),
+                    value: crate::SettingValue::Choice(1),
+                }],
+            )
+            .await;
+        assert!(matches!(result, Err(SdkError::Conflict(_))));
+        assert_eq!(transport.request_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_pico_settings_are_capability_gated() {
+        let transport = MockTransport::new(Vec::new());
+        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
+        assert!(matches!(
+            client.list_settings().await,
+            Err(SdkError::Unsupported(_))
+        ));
+        assert_eq!(transport.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn settings_post_only_changed_values_and_return_refreshed_snapshot() {
+        let old = r#"[{"key":"showHiddenFiles","name":"Show hidden files","category":"Files","type":"toggle","value":0}]"#;
+        let new = r#"[{"key":"showHiddenFiles","name":"Show hidden files","category":"Files","type":"toggle","value":1}]"#;
+        let transport = MockTransport::new(vec![
+            response(200, old),
+            response(200, old),
+            response(200, "Applied 1 setting(s)"),
+            response(200, new),
+        ]);
+        let client = DeviceClient::with_transport(DeviceKind::CrossPoint, transport.clone());
+        let snapshot = client.list_settings().await.unwrap();
+        let updated = client
+            .apply_settings(
+                snapshot,
+                vec![SettingChange {
+                    key: "showHiddenFiles".to_owned(),
+                    value: crate::SettingValue::Toggle(true),
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.settings[0].value, crate::SettingValue::Toggle(true));
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[2].path, "/api/settings");
+        assert!(
+            matches!(&requests[2].body, crate::transport::HttpBody::Json(body)
+            if serde_json::from_slice::<serde_json::Value>(body).unwrap() == serde_json::json!({"showHiddenFiles":1}))
+        );
     }
 }

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    FileEntry, FileKind, FileLocation, SdkError, WifiCredential, WifiNetwork,
+    FileEntry, FileKind, FileLocation, FontCatalog, OpdsCredential, OpdsServer, SdkError,
+    WifiCredential, WifiNetwork,
     transport::{HttpBody, HttpMethod, HttpRequest},
 };
 
@@ -25,6 +26,38 @@ struct CrossPointFile {
 }
 
 impl CrossPointAdapter {
+    #[must_use]
+    pub fn status_request() -> HttpRequest {
+        HttpRequest::new(HttpMethod::Get, "/api/status")
+    }
+
+    /// Checks that a response has CrossPoint's status identity fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the response is not a CrossPoint status document.
+    pub fn validate_status(body: &[u8]) -> Result<(), SdkError> {
+        let status: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid CrossPoint device status: {error}"))
+        })?;
+        let valid = status.is_object()
+            && status
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+            && status
+                .get("device")
+                .and_then(serde_json::Value::as_str)
+                .is_some();
+        if valid {
+            Ok(())
+        } else {
+            Err(SdkError::RemoteFailure(
+                "invalid CrossPoint device status: required fields are missing".to_owned(),
+            ))
+        }
+    }
+
     #[must_use]
     pub fn list_request(location: &FileLocation) -> HttpRequest {
         let mut request = HttpRequest::new(HttpMethod::Get, "/api/files");
@@ -50,6 +83,7 @@ impl CrossPointAdapter {
             file_name,
             field_name: "file".to_owned(),
             content_type,
+            fields: Vec::new(),
         };
         request
     }
@@ -119,6 +153,81 @@ impl CrossPointAdapter {
             .map_err(|error| {
                 SdkError::RemoteFailure(format!("invalid CrossPoint Wi-Fi list: {error}"))
             })
+    }
+
+    #[must_use]
+    pub fn fonts_list_request() -> HttpRequest {
+        HttpRequest::new(HttpMethod::Get, "/api/fonts")
+    }
+
+    #[must_use]
+    pub fn font_upload_request(family: &str, path: PathBuf, file_name: String) -> HttpRequest {
+        let mut request = HttpRequest::new(HttpMethod::Post, "/api/fonts/upload");
+        request.body = HttpBody::MultipartFile {
+            path,
+            file_name,
+            field_name: "file".to_owned(),
+            content_type: None,
+            fields: vec![("family".to_owned(), family.to_owned())],
+        };
+        request
+    }
+
+    /// # Errors
+    /// Returns an error if the family cannot be serialized.
+    pub fn font_delete_request(family: &str) -> Result<HttpRequest, SdkError> {
+        let body = serde_json::to_vec(&serde_json::json!({ "family": family }))
+            .map_err(|error| SdkError::InvalidArgument(format!("invalid font family: {error}")))?;
+        Ok(json_request(HttpMethod::Post, "/api/fonts/delete", body))
+    }
+
+    /// # Errors
+    /// Returns an error for a malformed font catalog.
+    pub fn parse_font_catalog(body: &str) -> Result<FontCatalog, SdkError> {
+        serde_json::from_str(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid CrossPoint font catalog: {error}"))
+        })
+    }
+
+    #[must_use]
+    pub fn opds_list_request() -> HttpRequest {
+        HttpRequest::new(HttpMethod::Get, "/api/opds")
+    }
+
+    /// # Errors
+    /// Returns an error if the credential cannot be serialized.
+    pub fn opds_save_request(credential: &OpdsCredential) -> Result<HttpRequest, SdkError> {
+        let body = serde_json::to_vec(credential)
+            .map_err(|error| SdkError::InvalidArgument(format!("invalid OPDS data: {error}")))?;
+        Ok(json_request(HttpMethod::Post, "/api/opds", body))
+    }
+
+    /// # Errors
+    /// Returns an error if the index cannot be serialized.
+    pub fn opds_delete_request(index: u32) -> Result<HttpRequest, SdkError> {
+        let body = serde_json::to_vec(&CrossPointWifiDelete { index })
+            .map_err(|error| SdkError::InvalidArgument(format!("invalid OPDS index: {error}")))?;
+        Ok(json_request(HttpMethod::Post, "/api/opds/delete", body))
+    }
+
+    /// # Errors
+    /// Returns an error for a malformed OPDS server list.
+    pub fn parse_opds_list(body: &str) -> Result<Vec<OpdsServer>, SdkError> {
+        serde_json::from_str(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid CrossPoint OPDS list: {error}"))
+        })
+    }
+
+    #[must_use]
+    pub fn settings_list_request() -> HttpRequest {
+        let mut request = HttpRequest::new(HttpMethod::Get, "/api/settings");
+        request.response_limit = Some(512 * 1024);
+        request
+    }
+
+    #[must_use]
+    pub fn settings_update_request(body: Vec<u8>) -> HttpRequest {
+        json_request(HttpMethod::Post, "/api/settings", body)
     }
 
     /// Parses a `CrossPoint` `/api/files` response for a directory location.
@@ -243,6 +352,7 @@ fn join_device_path(base: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::HttpBody;
 
     #[test]
     fn parses_directory_listing_into_common_entries() {
@@ -261,5 +371,56 @@ mod tests {
         assert_eq!(page.entries[0].kind, FileKind::Book);
         assert_eq!(page.entries[1].kind, FileKind::Directory);
         assert_eq!(page.entries[2].kind, FileKind::Other);
+    }
+
+    #[test]
+    fn font_endpoints_match_crossmux_contract() {
+        let catalog = CrossPointAdapter::parse_font_catalog(
+            r#"{"maxFamilies":128,"families":[{"name":"Literata","sizes":[12,14],"files":[{"name":"Literata_12.cpfont","size":123}]}]}"#,
+        ).unwrap();
+        assert_eq!(catalog.max_families, 128);
+        assert_eq!(catalog.families[0].files[0].size, 123);
+
+        let request = CrossPointAdapter::font_upload_request(
+            "Literata",
+            PathBuf::from("/tmp/font.cpfont"),
+            "Literata_12.cpfont".to_owned(),
+        );
+        assert_eq!(request.path, "/api/fonts/upload");
+        assert!(
+            matches!(request.body, HttpBody::MultipartFile { fields, field_name, .. }
+            if field_name == "file" && fields == [("family".to_owned(), "Literata".to_owned())])
+        );
+
+        let request = CrossPointAdapter::font_delete_request("Literata").unwrap();
+        assert_eq!(request.path, "/api/fonts/delete");
+        assert!(matches!(request.body, HttpBody::Json(body)
+            if serde_json::from_slice::<serde_json::Value>(&body).unwrap() == serde_json::json!({"family":"Literata"})));
+    }
+
+    #[test]
+    fn opds_update_omits_password_when_preserving_existing_secret() {
+        let servers = CrossPointAdapter::parse_opds_list(
+            r#"[{"index":0,"name":"Catalog","url":"http://host/opds","username":"reader","hasPassword":true}]"#,
+        ).unwrap();
+        assert_eq!(servers[0].index, 0);
+        assert!(servers[0].has_password);
+
+        let request = CrossPointAdapter::opds_save_request(&OpdsCredential {
+            index: Some(0),
+            name: "Catalog".to_owned(),
+            url: "http://host/opds".to_owned(),
+            username: "reader".to_owned(),
+            password: None,
+        })
+        .unwrap();
+        assert_eq!(request.path, "/api/opds");
+        assert!(matches!(request.body, HttpBody::Json(body) if {
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            value["index"] == 0 && value.get("password").is_none()
+        }));
+
+        let request = CrossPointAdapter::opds_delete_request(0).unwrap();
+        assert_eq!(request.path, "/api/opds/delete");
     }
 }

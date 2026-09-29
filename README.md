@@ -53,4 +53,9 @@ SDK 负责设备发现、设备能力识别、文件传输和文件管理。上�
 
 ## 开发状态
 
-当前为 Rust/UniFFI MVP 骨架阶段，尚未提供完整设备通信实现。
+当前提供 Read Pico 与 CrossPoint 的文件和 Wi-Fi 操作，以及 CrossPoint 的字体、
+OPDS 服务器和动态设置管理；具体能力见 [SDK 接口文档](docs/sdk/interface.md)。
+
+`DeviceProfile.file_formats.font_upload_extensions` 返回字体管理接口接受的格式，
+例如 CrossPoint 当前支持的 `cpfont`。上层 App 应读取该字段提供文件选择和过滤，
+不要在 App 中固定字体格式。

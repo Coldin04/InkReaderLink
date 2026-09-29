@@ -1,0 +1,6 @@
+[bindings.kotlin]
+cdylib_name = "picobookmgr"
+
+[bindings.swift]
+module_name = "PicoBookMgr"
+ffi_module_name = "PicoBookMgrFFI"

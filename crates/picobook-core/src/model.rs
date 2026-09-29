@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileKind {
     Book,
@@ -29,6 +31,7 @@ pub struct DeviceConstraints {
 pub struct DeviceFileFormats {
     pub accepts_any_upload_format: bool,
     pub upload_extensions: Vec<String>,
+    pub font_upload_extensions: Vec<String>,
     pub readable_extensions: Vec<String>,
 }
 
@@ -69,6 +72,85 @@ pub struct WifiCredential {
     pub index: Option<u32>,
     pub ssid: String,
     pub password: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct FontFile {
+    pub name: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct FontFamily {
+    pub name: String,
+    pub sizes: Vec<u32>,
+    pub files: Vec<FontFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FontCatalog {
+    pub max_families: u32,
+    pub families: Vec<FontFamily>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpdsServer {
+    pub index: u32,
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub has_password: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpdsCredential {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettingKind {
+    Toggle,
+    Choice { options: Vec<String> },
+    Number { min: i64, max: i64, step: i64 },
+    Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SettingValue {
+    Toggle(bool),
+    Choice(u32),
+    Number(i64),
+    Text(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingDescriptor {
+    pub key: String,
+    pub name: String,
+    pub category: String,
+    pub kind: SettingKind,
+    pub value: SettingValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingsSnapshot {
+    pub settings: Vec<SettingDescriptor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingChange {
+    pub key: String,
+    pub value: SettingValue,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

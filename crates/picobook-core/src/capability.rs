@@ -29,4 +29,12 @@ pub mod ids {
     pub const WIFI_LIST: &str = "wifi.list";
     pub const WIFI_SAVE: &str = "wifi.save";
     pub const WIFI_DELETE: &str = "wifi.delete";
+    pub const FONTS_LIST: &str = "fonts.list";
+    pub const FONTS_UPLOAD: &str = "fonts.upload";
+    pub const FONTS_DELETE: &str = "fonts.delete";
+    pub const OPDS_LIST: &str = "opds.list";
+    pub const OPDS_SAVE: &str = "opds.save";
+    pub const OPDS_DELETE: &str = "opds.delete";
+    pub const SETTINGS_LIST: &str = "settings.list";
+    pub const SETTINGS_UPDATE: &str = "settings.update";
 }

@@ -15,7 +15,9 @@
 - WebDAV、mDNS 等高阶功能暂不实现；设备专属高阶功能可使用显式设备类型的扩展函数。
 - 文件传输必须流式处理；每台设备的修改操作串行执行。
 - SDK 必须声明各设备允许上传和原生可读的文件格式，但不负责格式转换。
+- SDK 必须通过 `DeviceProfile.file_formats.font_upload_extensions` 声明字体管理接口接受的格式；上层 App 读取此字段，不得硬编码字体扩展名。
 - 尽量保证SDK接口文档在写作后尽快在docs目录下更新和分类记录。
+- 移动端产物命名：Android 原生库为 `libpicobookmgr.so`（加载名 `picobookmgr`），iOS Swift 模块为 `PicoBookMgr`；Rust crate 与 UniFFI Kotlin package 仍为 `picobook_sdk` / `uniffi.picobook_sdk`。重新生成绑定时必须与原生库一起更新，避免 ABI 不匹配。
 
 ## 固件
 

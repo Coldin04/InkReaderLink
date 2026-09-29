@@ -7,8 +7,10 @@ use std::{
 
 use picobook_core::{
     Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats, DeviceKind,
-    DeviceProfile, FileEntry, FileKind, FileLocation, SdkError, UploadOptions, UploadProgressSink,
-    UploadResult, WifiCredential, WifiNetwork,
+    DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog, FontFamily, FontFile,
+    OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind,
+    SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
+    WifiCredential, WifiNetwork,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -122,6 +124,224 @@ pub struct SdkWifiCredential {
     pub password: Option<String>,
 }
 
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkFontFile {
+    pub name: String,
+    pub size: u64,
+}
+
+impl From<FontFile> for SdkFontFile {
+    fn from(file: FontFile) -> Self {
+        Self {
+            name: file.name,
+            size: file.size,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkFontFamily {
+    pub name: String,
+    pub sizes: Vec<u32>,
+    pub files: Vec<SdkFontFile>,
+}
+
+impl From<FontFamily> for SdkFontFamily {
+    fn from(family: FontFamily) -> Self {
+        Self {
+            name: family.name,
+            sizes: family.sizes,
+            files: family.files.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkFontCatalog {
+    pub max_families: u32,
+    pub families: Vec<SdkFontFamily>,
+}
+
+impl From<FontCatalog> for SdkFontCatalog {
+    fn from(catalog: FontCatalog) -> Self {
+        Self {
+            max_families: catalog.max_families,
+            families: catalog.families.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkOpdsServer {
+    pub index: u32,
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub has_password: bool,
+}
+
+impl From<OpdsServer> for SdkOpdsServer {
+    fn from(server: OpdsServer) -> Self {
+        Self {
+            index: server.index,
+            name: server.name,
+            url: server.url,
+            username: server.username,
+            has_password: server.has_password,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkOpdsCredential {
+    pub index: Option<u32>,
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: Option<String>,
+}
+
+impl From<SdkOpdsCredential> for OpdsCredential {
+    fn from(credential: SdkOpdsCredential) -> Self {
+        Self {
+            index: credential.index,
+            name: credential.name,
+            url: credential.url,
+            username: credential.username,
+            password: credential.password,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Enum)]
+pub enum SdkSettingKind {
+    Toggle,
+    Choice { options: Vec<String> },
+    Number { min: i64, max: i64, step: i64 },
+    Text,
+}
+
+impl From<SettingKind> for SdkSettingKind {
+    fn from(kind: SettingKind) -> Self {
+        match kind {
+            SettingKind::Toggle => Self::Toggle,
+            SettingKind::Choice { options } => Self::Choice { options },
+            SettingKind::Number { min, max, step } => Self::Number { min, max, step },
+            SettingKind::Text => Self::Text,
+        }
+    }
+}
+
+impl From<SdkSettingKind> for SettingKind {
+    fn from(kind: SdkSettingKind) -> Self {
+        match kind {
+            SdkSettingKind::Toggle => Self::Toggle,
+            SdkSettingKind::Choice { options } => Self::Choice { options },
+            SdkSettingKind::Number { min, max, step } => Self::Number { min, max, step },
+            SdkSettingKind::Text => Self::Text,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Enum)]
+pub enum SdkSettingValue {
+    Toggle { value: bool },
+    Choice { index: u32 },
+    Number { value: i64 },
+    Text { value: String },
+}
+
+impl From<SettingValue> for SdkSettingValue {
+    fn from(value: SettingValue) -> Self {
+        match value {
+            SettingValue::Toggle(value) => Self::Toggle { value },
+            SettingValue::Choice(index) => Self::Choice { index },
+            SettingValue::Number(value) => Self::Number { value },
+            SettingValue::Text(value) => Self::Text { value },
+        }
+    }
+}
+
+impl From<SdkSettingValue> for SettingValue {
+    fn from(value: SdkSettingValue) -> Self {
+        match value {
+            SdkSettingValue::Toggle { value } => Self::Toggle(value),
+            SdkSettingValue::Choice { index } => Self::Choice(index),
+            SdkSettingValue::Number { value } => Self::Number(value),
+            SdkSettingValue::Text { value } => Self::Text(value),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkSettingDescriptor {
+    pub key: String,
+    pub name: String,
+    pub category: String,
+    pub kind: SdkSettingKind,
+    pub value: SdkSettingValue,
+}
+
+impl From<SettingDescriptor> for SdkSettingDescriptor {
+    fn from(setting: SettingDescriptor) -> Self {
+        Self {
+            key: setting.key,
+            name: setting.name,
+            category: setting.category,
+            kind: setting.kind.into(),
+            value: setting.value.into(),
+        }
+    }
+}
+
+impl From<SdkSettingDescriptor> for SettingDescriptor {
+    fn from(setting: SdkSettingDescriptor) -> Self {
+        Self {
+            key: setting.key,
+            name: setting.name,
+            category: setting.category,
+            kind: setting.kind.into(),
+            value: setting.value.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkSettingsSnapshot {
+    pub settings: Vec<SdkSettingDescriptor>,
+}
+
+impl From<SettingsSnapshot> for SdkSettingsSnapshot {
+    fn from(snapshot: SettingsSnapshot) -> Self {
+        Self {
+            settings: snapshot.settings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<SdkSettingsSnapshot> for SettingsSnapshot {
+    fn from(snapshot: SdkSettingsSnapshot) -> Self {
+        Self {
+            settings: snapshot.settings.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkSettingChange {
+    pub key: String,
+    pub value: SdkSettingValue,
+}
+
+impl From<SdkSettingChange> for SettingChange {
+    fn from(change: SdkSettingChange) -> Self {
+        Self {
+            key: change.key,
+            value: change.value.into(),
+        }
+    }
+}
+
 #[uniffi::export(foreign)]
 pub trait SdkUploadProgressObserver: Send + Sync {
     fn on_progress(&self, sent_bytes: u64, total_bytes: u64);
@@ -225,6 +445,7 @@ impl From<DeviceConstraints> for SdkDeviceConstraints {
 pub struct SdkDeviceFileFormats {
     pub accepts_any_upload_format: bool,
     pub upload_extensions: Vec<String>,
+    pub font_upload_extensions: Vec<String>,
     pub readable_extensions: Vec<String>,
 }
 
@@ -233,6 +454,7 @@ impl From<DeviceFileFormats> for SdkDeviceFileFormats {
         Self {
             accepts_any_upload_format: formats.accepts_any_upload_format,
             upload_extensions: formats.upload_extensions,
+            font_upload_extensions: formats.font_upload_extensions,
             readable_extensions: formats.readable_extensions,
         }
     }
@@ -335,6 +557,25 @@ impl SdkDeviceClient {
         Ok(Arc::new(Self {
             inner: Arc::new(inner),
         }))
+    }
+
+    /// Connects only after the selected device's information endpoint is verified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the URL is invalid, the device cannot be reached, or its
+    /// information response does not match the selected device type.
+    #[uniffi::constructor]
+    #[allow(clippy::needless_pass_by_value)]
+    pub async fn connect_and_verify(
+        device_type: String,
+        base_url: String,
+        timeout_ms: u64,
+    ) -> Result<Arc<Self>, SdkOperationError> {
+        let client = Self::connect(device_type, base_url, timeout_ms)?;
+        let inner = Arc::clone(&client.inner);
+        run_on_sdk_runtime(async move { inner.verify_connection().await }).await?;
+        Ok(client)
     }
 
     #[must_use]
@@ -492,6 +733,102 @@ impl SdkDeviceClient {
     pub async fn delete_wifi_network(&self, index: Option<u32>) -> Result<(), SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move { inner.delete_wifi_network(index).await }).await
+    }
+
+    /// Lists installed SD-card font families.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_fonts(&self) -> Result<SdkFontCatalog, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.list_fonts().await.map(Into::into) }).await
+    }
+
+    /// Streams a `.cpfont` file into a font family.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font(
+        &self,
+        family: String,
+        local_path: String,
+        file_name: String,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_font(family, PathBuf::from(local_path), file_name)
+                .await
+        })
+        .await
+    }
+
+    /// Deletes an installed font family.
+    /// # Errors
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn delete_font_family(&self, family: String) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.delete_font_family(family).await }).await
+    }
+
+    /// Lists saved OPDS servers without passwords.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_opds_servers(&self) -> Result<Vec<SdkOpdsServer>, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .list_opds_servers()
+                .await
+                .map(|servers| servers.into_iter().map(Into::into).collect())
+        })
+        .await
+    }
+
+    /// Adds or updates an OPDS server.
+    /// # Errors
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn save_opds_server(
+        &self,
+        credential: SdkOpdsCredential,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.save_opds_server(credential.into()).await }).await
+    }
+
+    /// Deletes an OPDS server by index.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn delete_opds_server(&self, index: u32) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.delete_opds_server(index).await }).await
+    }
+
+    /// Returns current editable settings and rendering metadata.
+    /// # Errors
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_settings(&self) -> Result<SdkSettingsSnapshot, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.list_settings().await.map(Into::into) }).await
+    }
+
+    /// Validates and applies changes against a previously returned snapshot.
+    /// # Errors
+    /// Returns capability, conflict, validation, transport, or protocol errors.
+    pub async fn apply_settings(
+        &self,
+        expected: SdkSettingsSnapshot,
+        changes: Vec<SdkSettingChange>,
+    ) -> Result<SdkSettingsSnapshot, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .apply_settings(
+                    expected.into(),
+                    changes.into_iter().map(Into::into).collect(),
+                )
+                .await
+                .map(Into::into)
+        })
+        .await
     }
 }
 

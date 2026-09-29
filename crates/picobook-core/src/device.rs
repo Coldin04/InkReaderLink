@@ -79,9 +79,18 @@ mod tests {
         assert!(ids.contains(&ids::FILE_UPLOAD));
         assert!(ids.contains(&ids::FILE_RENAME));
         assert!(ids.contains(&ids::UPLOAD_WEBSOCKET));
+        assert!(ids.contains(&ids::FONTS_LIST));
+        assert!(ids.contains(&ids::FONTS_UPLOAD));
+        assert!(ids.contains(&ids::FONTS_DELETE));
+        assert!(ids.contains(&ids::OPDS_LIST));
+        assert!(ids.contains(&ids::OPDS_SAVE));
+        assert!(ids.contains(&ids::OPDS_DELETE));
+        assert!(ids.contains(&ids::SETTINGS_LIST));
+        assert!(ids.contains(&ids::SETTINGS_UPDATE));
         assert!(profile.constraints.can_list_directories);
         assert!(profile.constraints.can_choose_upload_directory);
         assert!(profile.file_formats.accepts_any_upload_format);
+        assert_eq!(profile.file_formats.font_upload_extensions, ["cpfont"]);
         assert!(
             profile
                 .file_formats
@@ -98,6 +107,25 @@ mod tests {
         assert!(!profile.constraints.can_choose_upload_directory);
         assert!(!profile.file_formats.accepts_any_upload_format);
         assert_eq!(profile.file_formats.upload_extensions, ["epub", "txt"]);
+        assert!(profile.file_formats.font_upload_extensions.is_empty());
+        assert!(
+            !profile
+                .capabilities
+                .iter()
+                .any(|capability| capability.id() == ids::FONTS_LIST)
+        );
+        assert!(
+            !profile
+                .capabilities
+                .iter()
+                .any(|capability| capability.id() == ids::OPDS_LIST)
+        );
+        assert!(
+            !profile
+                .capabilities
+                .iter()
+                .any(|capability| capability.id() == ids::SETTINGS_LIST)
+        );
     }
 
     #[test]

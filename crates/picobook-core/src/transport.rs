@@ -35,6 +35,7 @@ pub enum HttpBody {
         file_name: String,
         field_name: String,
         content_type: Option<String>,
+        fields: Vec<(String, String)>,
     },
 }
 
@@ -44,6 +45,7 @@ pub struct HttpRequest {
     pub path: String,
     pub query: Vec<(String, String)>,
     pub body: HttpBody,
+    pub response_limit: Option<usize>,
 }
 
 impl HttpRequest {
@@ -54,6 +56,7 @@ impl HttpRequest {
             path: path.into(),
             query: Vec::new(),
             body: HttpBody::Empty,
+            response_limit: None,
         }
     }
 }
@@ -189,6 +192,7 @@ impl ReqwestTransport {
                 file_name,
                 field_name,
                 content_type,
+                fields,
             } => {
                 let file = File::open(&path).await.map_err(map_file_error)?;
                 let size = file.metadata().await.map_err(map_file_error)?.len();
@@ -200,7 +204,12 @@ impl ReqwestTransport {
                         SdkError::InvalidArgument(format!("invalid content type: {error}"))
                     })?;
                 }
-                Ok(builder.multipart(multipart::Form::new().part(field_name, part)))
+                let form = fields
+                    .into_iter()
+                    .fold(multipart::Form::new(), |form, (key, value)| {
+                        form.text(key, value)
+                    });
+                Ok(builder.multipart(form.part(field_name, part)))
             }
         }
     }
@@ -218,6 +227,7 @@ impl ReqwestTransport {
 #[async_trait]
 impl Transport for ReqwestTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError> {
+        let response_limit = request.response_limit;
         let response = self
             .request_builder(request)
             .await?
@@ -225,7 +235,17 @@ impl Transport for ReqwestTransport {
             .await
             .map_err(map_reqwest_error)?;
         let status = response.status().as_u16();
-        let body = response.bytes().await.map_err(map_reqwest_error)?.to_vec();
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            if response_limit.is_some_and(|limit| chunk.len() > limit.saturating_sub(body.len())) {
+                return Err(SdkError::RemoteFailure(
+                    "response exceeds size limit".to_owned(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
         Ok(HttpResponse { status, body })
     }
 

@@ -59,6 +59,7 @@ pub fn read_pico_definition() -> DeviceDefinition {
         DeviceFileFormats {
             accepts_any_upload_format: false,
             upload_extensions: extensions(&["epub", "txt"]),
+            font_upload_extensions: Vec::new(),
             readable_extensions: extensions(&["epub", "txt"]),
         },
     )
@@ -77,6 +78,7 @@ pub fn crosspoint_definition() -> DeviceDefinition {
         DeviceFileFormats {
             accepts_any_upload_format: true,
             upload_extensions: Vec::new(),
+            font_upload_extensions: extensions(&["cpfont"]),
             readable_extensions: extensions(&["epub", "txt", "md", "xtc"]),
         },
     )
@@ -92,7 +94,15 @@ pub fn crosspoint_definition() -> DeviceDefinition {
     .with_capability(ids::UPLOAD_WEBSOCKET)
     .with_capability(ids::WIFI_LIST)
     .with_capability(ids::WIFI_SAVE)
-    .with_capability(ids::WIFI_DELETE);
+    .with_capability(ids::WIFI_DELETE)
+    .with_capability(ids::FONTS_LIST)
+    .with_capability(ids::FONTS_UPLOAD)
+    .with_capability(ids::FONTS_DELETE)
+    .with_capability(ids::OPDS_LIST)
+    .with_capability(ids::OPDS_SAVE)
+    .with_capability(ids::OPDS_DELETE)
+    .with_capability(ids::SETTINGS_LIST)
+    .with_capability(ids::SETTINGS_UPDATE);
     definition.constraints.can_list_directories = true;
     definition.constraints.can_choose_upload_directory = true;
     definition
@@ -113,6 +123,7 @@ mod tests {
             DeviceFileFormats {
                 accepts_any_upload_format: false,
                 upload_extensions: vec!["epub".to_owned()],
+                font_upload_extensions: Vec::new(),
                 readable_extensions: vec!["epub".to_owned()],
             },
         );
