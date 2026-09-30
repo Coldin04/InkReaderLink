@@ -15,3 +15,7 @@ implementation("com.cold04:picobookmgr:<version>")
 
 The package requires Android API 28 or newer and includes `arm64-v8a`,
 `armeabi-v7a`, and `x86_64` native libraries.
+
+For Maven Central, publish a version tag from the SDK repository. For local App
+development, see the root README's **SDK 引用指南** for the `local` and
+`git.<SHA>` version conventions and the `mavenLocal()` publishing command.

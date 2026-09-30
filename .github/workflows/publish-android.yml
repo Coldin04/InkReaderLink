@@ -41,6 +41,10 @@ jobs:
       - name: Validate release version
         run: |
           version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == local || "$version" == git.* ]]; then
+            echo "The local and git.<SHA> source markers cannot be published to Maven Central." >&2
+            exit 1
+          fi
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           echo "SDK_VERSION=$version" >> "$GITHUB_ENV"
 
