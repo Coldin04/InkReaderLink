@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Stable, machine-readable device information item.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceInfoField {
+    pub key: String,
+    pub value: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileKind {
     Book,

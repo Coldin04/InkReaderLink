@@ -14,6 +14,7 @@ impl Capability {
 }
 
 pub mod ids {
+    pub const DEVICE_INFO: &str = "device.info";
     pub const FILE_LIST: &str = "files.list";
     pub const FILE_DIRECTORY_LIST: &str = "files.list.directories";
     pub const FILE_UPLOAD: &str = "files.upload";

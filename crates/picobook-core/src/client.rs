@@ -69,6 +69,21 @@ impl DeviceClient {
         }
     }
 
+    /// Fetches the currently available information from the connected device.
+    pub async fn device_info(&self) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
+        self.require(ids::DEVICE_INFO)?;
+        let request = match self.kind {
+            DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
+            DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
+        };
+        let response = self.transport.execute(request).await?;
+        ensure_success(&response, "get device info")?;
+        match self.kind {
+            DeviceKind::ReadPico => ReadPicoAdapter::parse_info(&response.body),
+            DeviceKind::CrossPoint => CrossPointAdapter::parse_status(&response.body),
+        }
+    }
+
     /// Lists files at a supported location.
     ///
     /// # Errors

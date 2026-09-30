@@ -6,10 +6,10 @@ use std::{
 };
 
 use picobook_core::{
-    Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats, DeviceKind,
-    DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog, FontFamily, FontFile,
-    OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind,
-    SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
+    Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats,
+    DeviceInfoField, DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog,
+    FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor,
+    SettingKind, SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
     WifiCredential, WifiNetwork,
 };
 
@@ -426,6 +426,22 @@ pub struct SdkDeviceProfile {
     pub file_formats: SdkDeviceFileFormats,
 }
 
+/// Machine-readable item for a device information page. Localize `key` in the app.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkDeviceInfoField {
+    pub key: String,
+    pub value: String,
+}
+
+impl From<DeviceInfoField> for SdkDeviceInfoField {
+    fn from(field: DeviceInfoField) -> Self {
+        Self {
+            key: field.key,
+            value: field.value,
+        }
+    }
+}
+
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct SdkDeviceConstraints {
     pub can_list_directories: bool,
@@ -581,6 +597,19 @@ impl SdkDeviceClient {
     #[must_use]
     pub fn profile(&self) -> SdkDeviceProfile {
         self.inner.profile().clone().into()
+    }
+
+    /// Fetches device information for an information page. Keys are stable identifiers
+    /// intended for app-side localization; values are returned as displayable text.
+    pub async fn device_info(&self) -> Result<Vec<SdkDeviceInfoField>, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .device_info()
+                .await
+                .map(|fields| fields.into_iter().map(Into::into).collect())
+        })
+        .await
     }
 
     /// Lists files at a device location.
