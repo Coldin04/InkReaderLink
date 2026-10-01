@@ -35,5 +35,5 @@
 
 ## CI 发布
 
-- push 和 Pull Request 运行格式、Clippy、Rust 测试、脚本语法和 Android 绑定/AAR 检查；不发布 Maven Central 或 GitHub Release。
-- 仅在创建版本 tag 时运行版本发布构建并发布 GitHub Release。
+- 仅推送到 `master` 或目标分支为 `master` 的 Pull Request 运行提交检查；单独推送功能分支不运行。检查包含格式、Clippy、Rust 测试、脚本语法和 Android 绑定/AAR 构建，同一分支或 PR 的新提交会取消旧运行。fork PR 触发前应由 GitHub Actions 的首次贡献者审批设置把关；工作流只有 `contents: read` 权限。
+- 提交检查不发布 Maven Central 或 GitHub Release；仅版本 tag 触发版本发布构建并发布 GitHub Release。

@@ -2,11 +2,17 @@ name: SDK Checks
 
 on:
   push:
-    branches: ["**"]
+    branches: [master]
   pull_request:
+    branches: [master]
 
 permissions:
   contents: read
+
+# Replace obsolete runs when new commits arrive on the same branch or PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:

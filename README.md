@@ -96,4 +96,4 @@ GitHub App 构建流程使用同一来源约定：普通版本直接从 Maven Ce
 
 ## 提交检查
 
-push 和 Pull Request 会运行 Rust 格式、Clippy、测试与脚本语法检查，并为 Android 的三个 ABI 生成 UniFFI 绑定和原生库、编译 AAR，核对包名和 AAR 内的库文件。该检查不会发布 Maven Central 或 GitHub Release；版本发布仍只由版本 tag 触发。
+SDK 提交检查只在推送到 `master`，或 Pull Request 的目标分支为 `master` 时运行；单独推送功能分支不会启动检查。检查覆盖代码和文档改动，包括 Rust 格式、Clippy、测试、脚本语法，以及 Android 三个 ABI 的 UniFFI 绑定/原生库和 AAR。对同一分支或 PR，新提交会取消尚未完成的旧检查。来自 fork 的 PR 也符合触发条件；仓库管理员应在 GitHub Actions 设置中要求首次贡献者审批后再运行工作流。工作流仅有 `contents: read` 权限，不发布 Maven Central 或 GitHub Release；版本发布仍只由版本 tag 触发。
