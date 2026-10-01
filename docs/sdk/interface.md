@@ -1,11 +1,19 @@
 # SDK Interface
 
+## Crate 与平台边界
+
+`inkreaderlink-core` 提供与平台无关的设备模型、错误、异步客户端和固件 adapters；它不依赖 UniFFI 或移动端运行时。`inkreaderlink-uniffi` 是移动端边界层，负责把核心模型、错误和异步操作映射为 UniFFI API。设备协议和能力策略只实现于核心 crate，其他入口应复用核心 API，而不是复制 adapter。
+
+Android AAR 将同一 SDK 源码构建出的 Kotlin 绑定与 `libcold04_inkreaderlink.so` 一起打包。Kotlin 包为 `uniffi.inkreaderlink_uniffi`，JNI 加载名为 `cold04_inkreaderlink`；iOS Swift module 为 `InkReaderLink`。绑定或导出 ABI 改动必须同时重新生成绑定与原生库。
+
+Flutter 接入可在现有核心之上增加 Dart FFI 或插件边界，服务端可直接依赖核心 crate 并选择合适的 async runtime。当前尚未为这两类入口增加代码或依赖。
+
 ## 设备能力
 
 设备发现和识别完成后返回 `DeviceProfile`。上层应用应根据 capability 和
 constraint 渲染功能，不应根据设备类型硬编码界面。
 
-`picobook_core::config::DeviceDefinition` 是设备声明的统一配置入口。新增或调整
+`inkreaderlink_core::config::DeviceDefinition` 是设备声明的统一配置入口。新增或调整
 固件时，应在此处集中配置格式、约束和可选能力。`files.upload` 是所有受支持
 设备的最低能力，由 SDK 保证存在；文件列表、删除、下载、目录、重命名、移动、
 WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。只支持上传的设备可直接使用

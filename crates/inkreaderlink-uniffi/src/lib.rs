@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use picobook_core::{
+use inkreaderlink_core::{
     Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats,
     DeviceInfoField, DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog,
     FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor,
@@ -601,6 +601,11 @@ impl SdkDeviceClient {
 
     /// Fetches device information for an information page. Keys are stable identifiers
     /// intended for app-side localization; values are returned as displayable text.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mapped SDK operation error for unsupported capabilities,
+    /// transport failures, or invalid device responses.
     pub async fn device_info(&self) -> Result<Vec<SdkDeviceInfoField>, SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move {

@@ -79,6 +79,10 @@ impl ReadPicoAdapter {
     }
 
     /// Parses the non-secret fields from `/info` for an information page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the device info response is invalid.
     pub fn parse_info(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         Self::validate_info(body)?;
         let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
@@ -99,8 +103,7 @@ impl ReadPicoAdapter {
                     key: key.to_owned(),
                     value: value
                         .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string()),
+                        .map_or_else(|| value.to_string(), str::to_owned),
                 });
             }
         }

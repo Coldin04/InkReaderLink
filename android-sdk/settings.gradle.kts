@@ -14,4 +14,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "picobookmgr-android"
+rootProject.name = "inkreaderlink-android-sdk"

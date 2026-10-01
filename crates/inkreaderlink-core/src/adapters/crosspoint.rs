@@ -31,11 +31,11 @@ impl CrossPointAdapter {
         HttpRequest::new(HttpMethod::Get, "/api/status")
     }
 
-    /// Checks that a response has CrossPoint's status identity fields.
+    /// Checks that a response has `CrossPoint`'s status identity fields.
     ///
     /// # Errors
     ///
-    /// Returns an error when the response is not a CrossPoint status document.
+    /// Returns an error when the response is not a `CrossPoint` status document.
     pub fn validate_status(body: &[u8]) -> Result<(), SdkError> {
         let status: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
             SdkError::RemoteFailure(format!("invalid CrossPoint device status: {error}"))
@@ -59,6 +59,10 @@ impl CrossPointAdapter {
     }
 
     /// Parses available non-secret fields from `/api/status`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the status response is invalid.
     pub fn parse_status(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         Self::validate_status(body)?;
         let status: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
@@ -79,8 +83,7 @@ impl CrossPointAdapter {
                     key: key.to_owned(),
                     value: value
                         .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string()),
+                        .map_or_else(|| value.to_string(), str::to_owned),
                 });
             }
         }

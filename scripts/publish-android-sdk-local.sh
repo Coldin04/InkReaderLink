@@ -41,7 +41,7 @@ fi
 bash ./scripts/build-android-sdk.sh
 "${gradle_cmd[@]}" -p android-sdk publishToMavenLocal "-PsdkVersion=$sdk_version"
 
-printf '\nInstalled com.cold04:picobookmgr:%s into mavenLocal().\n' "$sdk_version"
+printf '\nInstalled com.cold04:inkreaderlink-uniffi:%s into mavenLocal().\n' "$sdk_version"
 printf 'SDK source commit: %s\n' "$(git rev-parse HEAD)"
 if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
     printf '%s\n' 'The build also included uncommitted or untracked SDK source changes.'

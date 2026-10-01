@@ -70,6 +70,11 @@ impl DeviceClient {
     }
 
     /// Fetches the currently available information from the connected device.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unsupported` when the device has no information-page capability,
+    /// or a transport, HTTP, or invalid-response error.
     pub async fn device_info(&self) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         self.require(ids::DEVICE_INFO)?;
         let request = match self.kind {
