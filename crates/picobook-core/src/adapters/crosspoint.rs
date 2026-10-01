@@ -58,6 +58,35 @@ impl CrossPointAdapter {
         }
     }
 
+    /// Parses available non-secret fields from `/api/status`.
+    pub fn parse_status(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
+        Self::validate_status(body)?;
+        let status: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid CrossPoint device status: {error}"))
+        })?;
+        let mut fields = Vec::new();
+        for (wire_key, key) in [
+            ("version", "firmware_version"),
+            ("ip", "ip_address"),
+            ("mode", "network_mode"),
+            ("rssi", "wifi_rssi"),
+            ("freeHeap", "free_heap"),
+            ("uptime", "uptime"),
+            ("device", "device_model"),
+        ] {
+            if let Some(value) = status.get(wire_key).filter(|value| !value.is_null()) {
+                fields.push(crate::DeviceInfoField {
+                    key: key.to_owned(),
+                    value: value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string()),
+                });
+            }
+        }
+        Ok(fields)
+    }
+
     #[must_use]
     pub fn list_request(location: &FileLocation) -> HttpRequest {
         let mut request = HttpRequest::new(HttpMethod::Get, "/api/files");

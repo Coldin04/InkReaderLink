@@ -11,7 +11,26 @@ constraint 渲染功能，不应根据设备类型硬编码界面。
 WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。只支持上传的设备可直接使用
 `DeviceDefinition::upload_only`。
 
-当前文件相关 capability：
+### 设备信息 capability
+
+`device.info` 表示设备支持读取信息页字段。它是可选能力：设备定义可以不声明，
+App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调用 `deviceInfo()`。
+未声明时调用返回 `Unsupported`。当前 Read Pico 和 CrossPoint 定义均声明此能力；
+后续固件若不支持对应信息接口，应在设备定义中移除此 capability。
+
+`deviceInfo()` 重新请求固件的信息接口，并返回 `SdkDeviceInfoField` 列表。每项包含
+稳定字段 `key` 和字符串 `value`。Read Pico 字段 key 包括 `storage_is_flash`、
+`storage_free_bytes`、`storage_file_limit`、`network_mode`、`wifi_configured`、
+`wifi_ssid` 和 `storage_root`；CrossPoint 字段 key 包括 `firmware_version`、
+`ip_address`、`network_mode`、`wifi_rssi`、`free_heap`、`uptime` 和 `device_model`。
+固件未提供的可选字段会被省略。SDK 不提供本地化后的标题；App 应根据 `key` 映射
+本地化标签，并按字段含义格式化值（例如字节数、运行时间及网络模式）。
+
+`connectAndVerify` 仍会验证设备信息接口和设备身份字段。若某个固件完全没有该接口，
+可用已知设备类型调用 `connect`；该入口不执行设备验证。此时应按固件对应的设备定义
+省略 `device.info`，其他已声明能力仍可独立使用。
+
+### 文件相关 capability
 
 | ID | 含义 |
 |---|---|
@@ -81,7 +100,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 
 ## 可调用 API
 
-`SdkDeviceClient` 统一提供：`listFiles`、`upload`、`delete`、`download`、
+`SdkDeviceClient` 统一提供：`deviceInfo`、`listFiles`、`upload`、`delete`、`download`、
 `createDirectory`、`rename`、`moveFile`、`listWifiNetworks`、
 `saveWifiNetwork`、`deleteWifiNetwork`、`listFonts`、`uploadFont`、
 `deleteFontFamily`、`listOpdsServers`、`saveOpdsServer`、`deleteOpdsServer`、

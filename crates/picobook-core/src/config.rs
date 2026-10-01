@@ -63,6 +63,7 @@ pub fn read_pico_definition() -> DeviceDefinition {
             readable_extensions: extensions(&["epub", "txt"]),
         },
     )
+    .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
     .with_capability(ids::FILE_DELETE)
     .with_capability(ids::UPLOAD_EXPLICIT_OVERWRITE)
@@ -82,6 +83,7 @@ pub fn crosspoint_definition() -> DeviceDefinition {
             readable_extensions: extensions(&["epub", "txt", "md", "xtc"]),
         },
     )
+    .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
     .with_capability(ids::FILE_DIRECTORY_LIST)
     .with_capability(ids::UPLOAD_DIRECTORY_TARGET)

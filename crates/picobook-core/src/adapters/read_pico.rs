@@ -78,6 +78,35 @@ impl ReadPicoAdapter {
         }
     }
 
+    /// Parses the non-secret fields from `/info` for an information page.
+    pub fn parse_info(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
+        Self::validate_info(body)?;
+        let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid Read Pico device info: {error}"))
+        })?;
+        let mut fields = Vec::new();
+        for (wire_key, key) in [
+            ("is_flash", "storage_is_flash"),
+            ("free_bytes", "storage_free_bytes"),
+            ("file_limit", "storage_file_limit"),
+            ("mode", "network_mode"),
+            ("wifi_configured", "wifi_configured"),
+            ("wifi_ssid", "wifi_ssid"),
+            ("root", "storage_root"),
+        ] {
+            if let Some(value) = info.get(wire_key).filter(|value| !value.is_null()) {
+                fields.push(crate::DeviceInfoField {
+                    key: key.to_owned(),
+                    value: value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string()),
+                });
+            }
+        }
+        Ok(fields)
+    }
+
     #[must_use]
     pub fn list_request(page: usize) -> HttpRequest {
         let mut request = HttpRequest::new(HttpMethod::Get, "/books");
