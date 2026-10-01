@@ -12,7 +12,7 @@ group = "com.cold04"
 version = sdkVersion
 
 android {
-    namespace = "com.cold04.picobookmgr"
+    namespace = "com.cold04.inkreaderlink.uniffi"
     compileSdk = 37
 
     defaultConfig {
@@ -34,16 +34,16 @@ dependencies {
 }
 
 mavenPublishing {
-    coordinates("com.cold04", "picobookmgr", sdkVersion)
+    coordinates("com.cold04", "inkreaderlink-uniffi", sdkVersion)
     publishToMavenCentral(automaticRelease = true)
     if (providers.gradleProperty("signingInMemoryKey").isPresent) {
         signAllPublications()
     }
 
     pom {
-        name.set("PicoBook Manager SDK for Android")
-        description.set("Android bindings and native libraries for the PicoBook device management SDK")
-        url.set("https://github.com/Coldin04/PicoBook_SDK")
+        name.set("InkReaderLink Manager SDK for Android")
+        description.set("Android bindings and native libraries for the InkReaderLink device management SDK")
+        url.set("https://github.com/Coldin04/InkReaderLink")
         licenses {
             license {
                 name.set("MIT License")
@@ -58,9 +58,9 @@ mavenPublishing {
             }
         }
         scm {
-            url.set("https://github.com/Coldin04/PicoBook_SDK")
-            connection.set("scm:git:https://github.com/Coldin04/PicoBook_SDK.git")
-            developerConnection.set("scm:git:ssh://git@github.com/Coldin04/PicoBook_SDK.git")
+            url.set("https://github.com/Coldin04/InkReaderLink")
+            connection.set("scm:git:https://github.com/Coldin04/InkReaderLink.git")
+            developerConnection.set("scm:git:ssh://git@github.com/Coldin04/InkReaderLink.git")
         }
     }
 }

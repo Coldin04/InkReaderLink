@@ -12,6 +12,7 @@ fi
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 generated_dir="$repo_root/android-sdk/build/generated"
+rm -rf "$generated_dir/jniLibs" "$generated_dir/sources/uniffi"
 mkdir -p "$generated_dir/jniLibs" "$generated_dir/sources/uniffi"
 
 cd "$repo_root"
@@ -20,19 +21,18 @@ cargo ndk \
     -t armeabi-v7a \
     -t x86_64 \
     -o "$generated_dir/jniLibs" \
-    build --release -p picobook_sdk
+    build --release -p inkreaderlink-uniffi
 
 for abi in arm64-v8a armeabi-v7a x86_64; do
     abi_dir="$generated_dir/jniLibs/$abi"
-    if [[ ! -f "$abi_dir/libpicobook_sdk.so" ]]; then
+    if [[ ! -f "$abi_dir/libinkreaderlink_uniffi.so" ]]; then
         printf 'cargo-ndk did not produce the expected library for %s\n' "$abi" >&2
         exit 1
     fi
-    mv "$abi_dir/libpicobook_sdk.so" "$abi_dir/libpicobookmgr.so"
+    mv "$abi_dir/libinkreaderlink_uniffi.so" "$abi_dir/libcold04_inkreaderlink.so"
 done
 
 uniffi-bindgen generate \
-    --library "$repo_root/target/aarch64-linux-android/release/libpicobook_sdk.so" \
+    --library "$repo_root/target/aarch64-linux-android/release/libinkreaderlink_uniffi.so" \
     --language kotlin \
-    --config "$repo_root/crates/picobook-sdk/uniffi.toml" \
     --out-dir "$generated_dir/sources/uniffi"

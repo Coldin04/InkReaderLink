@@ -650,6 +650,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "inkreaderlink-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "inkreaderlink-uniffi"
+version = "0.1.0"
+dependencies = [
+ "inkreaderlink-core",
+ "thiserror",
+ "tokio",
+ "uniffi",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -762,32 +788,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "picobook-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "url",
-]
-
-[[package]]
-name = "picobook_sdk"
-version = "0.1.0"
-dependencies = [
- "picobook-core",
- "thiserror",
- "tokio",
- "uniffi",
-]
 
 [[package]]
 name = "pin-project-lite"

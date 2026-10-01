@@ -1,4 +1,4 @@
-# PicoBook SDK
+# InkReaderLink
 
 ## 项目
 
@@ -11,13 +11,14 @@
 - 设备发现后返回设备信息和能力声明；上层按能力声明式展示功能。
 - 各固件使用独立 adapter，SDK 内部按设备类型路由。
 - SDK 对外 interface 和返回模型尽量设备无关、统一、通用。
+- `inkreaderlink-core` 不依赖 UniFFI 或移动平台；`inkreaderlink-uniffi` 只负责将核心模型、错误和异步 API 映射到 UniFFI。
 - CrossPoint 与 Read Pico 的 endpoint、请求格式和错误语义只在各自 adapter 内处理。
 - WebDAV、mDNS 等高阶功能暂不实现；设备专属高阶功能可使用显式设备类型的扩展函数。
 - 文件传输必须流式处理；每台设备的修改操作串行执行。
 - SDK 必须声明各设备允许上传和原生可读的文件格式，但不负责格式转换。
 - SDK 必须通过 `DeviceProfile.file_formats.font_upload_extensions` 声明字体管理接口接受的格式；上层 App 读取此字段，不得硬编码字体扩展名。
 - 尽量保证SDK接口文档在写作后尽快在docs目录下更新和分类记录。
-- 移动端产物命名：Android 原生库为 `libpicobookmgr.so`（加载名 `picobookmgr`），iOS Swift 模块为 `PicoBookMgr`；Rust crate 与 UniFFI Kotlin package 仍为 `picobook_sdk` / `uniffi.picobook_sdk`。重新生成绑定时必须与原生库一起更新，避免 ABI 不匹配。
+- 移动端产物命名：Android 原生库为 `libcold04_inkreaderlink.so`（加载名 `cold04_inkreaderlink`），iOS Swift 模块为 `InkReaderLink`；Rust crate 与 UniFFI Kotlin package 为 `inkreaderlink-uniffi` / `uniffi.inkreaderlink_uniffi`。重新生成绑定时必须与原生库一起更新，避免 ABI 不匹配。
 
 ## 固件
 
@@ -34,6 +35,5 @@
 
 ## CI 发布
 
-- MVP 可用阶段完成后再增加 GitHub Actions。
-- 仅在创建版本 tag 时执行编译并发布 GitHub Release。
-- 非 tag 提交不执行编译发布流程，避免浪费资源。
+- push 和 Pull Request 运行格式、Clippy、Rust 测试、脚本语法和 Android 绑定/AAR 检查；不发布 Maven Central 或 GitHub Release。
+- 仅在创建版本 tag 时运行版本发布构建并发布 GitHub Release。

@@ -1,0 +1,86 @@
+name: SDK Checks
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run SDK tests
+        run: cargo test --workspace --locked
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Check shell scripts
+        run: bash -n scripts/*.sh
+
+  android-bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust Android tools
+        run: |
+          cargo install cargo-ndk --locked
+          cargo install uniffi --version 0.32.2 --features cli --bin uniffi-bindgen --locked
+
+      - name: Build Android native libraries and bindings
+        run: bash scripts/build-android-sdk.sh
+
+      - name: Compile Android SDK AAR
+        run: gradle --no-daemon -p android-sdk assembleRelease
+
+      - name: Verify generated package and matching ABIs
+        run: |
+          if grep -RniE '(^|[^[:alnum:]_])(picobook_sdk|picobook-core|picobook-sdk|picobookmgr|PicoBookMgr)([^[:alnum:]_]|$)' Cargo.toml Cargo.lock README.md AGENTS.md android-sdk/README.md android-sdk/build.gradle.kts android-sdk/consumer-rules.pro android-sdk/settings.gradle.kts crates scripts docs; then
+            echo "Legacy PicoBook SDK identifiers remain in SDK metadata or build files." >&2
+            exit 1
+          fi
+          grep -Fq 'package uniffi.inkreaderlink_uniffi' android-sdk/build/generated/sources/uniffi/uniffi/inkreaderlink_uniffi/inkreaderlink_uniffi.kt
+          grep -Fq 'return "cold04_inkreaderlink"' android-sdk/build/generated/sources/uniffi/uniffi/inkreaderlink_uniffi/inkreaderlink_uniffi.kt
+          aar="$(find android-sdk/build/outputs/aar -name '*.aar' -print -quit)"
+          test -n "$aar"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            test -s "android-sdk/build/generated/jniLibs/$abi/libcold04_inkreaderlink.so"
+            unzip -Z1 "$aar" | grep -Fxq "jni/$abi/libcold04_inkreaderlink.so"
+          done

@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/picobook-core",
-    "crates/picobook-sdk",
+    "crates/inkreaderlink-core",
+    "crates/inkreaderlink-uniffi",
 ]
 resolver = "3"
 
@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Coldin04"]
-repository = "https://github.com/Coldin04/picobook_sdk"
+repository = "https://github.com/Coldin04/InkReaderLink.git"
 rust-version = "1.85"
 
 [workspace.lints.rust]

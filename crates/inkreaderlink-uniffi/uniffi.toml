@@ -1,0 +1,6 @@
+[bindings.kotlin]
+cdylib_name = "cold04_inkreaderlink"
+
+[bindings.swift]
+module_name = "InkReaderLink"
+ffi_module_name = "InkReaderLinkFFI"
