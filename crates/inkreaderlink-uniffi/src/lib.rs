@@ -7,10 +7,10 @@ use std::{
 
 use inkreaderlink_core::{
     Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats,
-    DeviceInfoField, DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog,
-    FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor,
-    SettingKind, SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
-    WifiCredential, WifiNetwork,
+    DeviceInfoField, DeviceKind, DeviceProfile, FileDownload, FileEntry, FileKind, FileLocation,
+    FontCatalog, FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange,
+    SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot, UploadOptions,
+    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -79,6 +79,21 @@ impl From<FileEntry> for SdkFileEntry {
             path: entry.path,
             size: entry.size,
             kind: entry.kind.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkFileDownload {
+    pub path: String,
+    pub destination: String,
+}
+
+impl From<SdkFileDownload> for FileDownload {
+    fn from(file: SdkFileDownload) -> Self {
+        Self {
+            path: file.path,
+            destination: PathBuf::from(file.destination),
         }
     }
 }
@@ -677,6 +692,13 @@ impl SdkDeviceClient {
         run_on_sdk_runtime(async move { inner.delete(path).await }).await
     }
 
+    /// Deletes multiple remote paths. Supported-device endpoint differences are
+    /// handled by the SDK; sequential execution stops at the first failure.
+    pub async fn delete_files(&self, paths: Vec<String>) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.delete_files(paths).await }).await
+    }
+
     /// Streams a remote file to a local destination.
     ///
     /// # Errors
@@ -690,6 +712,17 @@ impl SdkDeviceClient {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move { inner.download(path, PathBuf::from(destination)).await })
             .await
+    }
+
+    /// Downloads multiple remote files to the supplied local destinations.
+    /// Downloads are streamed one at a time and stop at the first failure.
+    pub async fn download_files(
+        &self,
+        files: Vec<SdkFileDownload>,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        let files = files.into_iter().map(Into::into).collect();
+        run_on_sdk_runtime(async move { inner.download_files(files).await }).await
     }
 
     /// Creates a remote directory.
@@ -728,6 +761,16 @@ impl SdkDeviceClient {
     ) -> Result<(), SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move { inner.move_file(path, destination).await }).await
+    }
+
+    /// Moves multiple remote files into one existing directory, serially.
+    pub async fn move_files(
+        &self,
+        paths: Vec<String>,
+        destination: String,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.move_files(paths, destination).await }).await
     }
 
     /// Lists saved Wi-Fi credentials without passwords.
@@ -777,7 +820,7 @@ impl SdkDeviceClient {
         run_on_sdk_runtime(async move { inner.list_fonts().await.map(Into::into) }).await
     }
 
-    /// Streams a `.cpfont` file into a font family.
+    /// Streams a device-supported font file. Read Pico rejects same-name files by default.
     /// # Errors
     /// Returns validation, capability, file, transport, or protocol errors.
     pub async fn upload_font(
@@ -790,6 +833,79 @@ impl SdkDeviceClient {
         run_on_sdk_runtime(async move {
             inner
                 .upload_font(family, PathBuf::from(local_path), file_name)
+                .await
+        })
+        .await
+    }
+
+    /// Streams a font file and reports bytes supplied to the HTTP request body.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font_with_progress(
+        &self,
+        family: String,
+        local_path: String,
+        file_name: String,
+        progress_observer: Arc<dyn SdkUploadProgressObserver>,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_font_with_progress(
+                    family,
+                    PathBuf::from(local_path),
+                    file_name,
+                    Arc::new(FfiProgressSink {
+                        observer: progress_observer,
+                    }),
+                )
+                .await
+        })
+        .await
+    }
+
+    /// Streams a font file with progress and an explicit overwrite choice.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font_with_overwrite_and_progress(
+        &self,
+        family: String,
+        local_path: String,
+        file_name: String,
+        overwrite: bool,
+        progress_observer: Arc<dyn SdkUploadProgressObserver>,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_font_with_overwrite_and_progress(
+                    family,
+                    PathBuf::from(local_path),
+                    file_name,
+                    overwrite,
+                    Some(Arc::new(FfiProgressSink {
+                        observer: progress_observer,
+                    })),
+                )
+                .await
+        })
+        .await
+    }
+
+    /// Streams a font and optionally replaces a same-name Read Pico font.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font_with_overwrite(
+        &self,
+        family: String,
+        local_path: String,
+        file_name: String,
+        overwrite: bool,
+    ) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_font_with_overwrite(family, PathBuf::from(local_path), file_name, overwrite)
                 .await
         })
         .await

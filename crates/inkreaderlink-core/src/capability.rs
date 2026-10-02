@@ -27,11 +27,13 @@ pub mod ids {
     pub const UPLOAD_EXPLICIT_OVERWRITE: &str = "upload.explicit-overwrite";
     pub const UPLOAD_BACKUP_REPLACE: &str = "upload.backup-replace";
     pub const UPLOAD_WEBSOCKET: &str = "upload.websocket";
+    pub const FONTS_UPLOAD_PROGRESS: &str = "fonts.upload.progress";
     pub const WIFI_LIST: &str = "wifi.list";
     pub const WIFI_SAVE: &str = "wifi.save";
     pub const WIFI_DELETE: &str = "wifi.delete";
     pub const FONTS_LIST: &str = "fonts.list";
     pub const FONTS_UPLOAD: &str = "fonts.upload";
+    pub const FONTS_UPLOAD_FAMILY: &str = "fonts.upload.family";
     pub const FONTS_DELETE: &str = "fonts.delete";
     pub const OPDS_LIST: &str = "opds.list";
     pub const OPDS_SAVE: &str = "opds.save";

@@ -54,11 +54,13 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | `upload.explicit-overwrite` | 可显式覆盖上传 |
 | `upload.backup-replace` | 可用 `.back` 备份替换 |
 | `upload.websocket` | 可用 WebSocket 上传 |
-| `wifi.list` | 可列出已保存 Wi-Fi |
+| `fonts.upload.progress` | SDK 可回传写入字体上传请求体的字节数 |
+| `wifi.list` | 可读取固件暴露的已保存 Wi-Fi 信息 |
 | `wifi.save` | 可保存或更新 Wi-Fi |
 | `wifi.delete` | 可删除已保存 Wi-Fi |
 | `fonts.list` | 可列出已安装字体族 |
-| `fonts.upload` | 可上传 `.cpfont` 字体文件 |
+| `fonts.upload` | 可上传设备声明的字体文件（Read Pico 为 `.ttf`，CrossPoint 为 `.cpfont`） |
+| `fonts.upload.family` | 上传字体时必须提供字体族名称 |
 | `fonts.delete` | 可删除字体族 |
 | `opds.list` | 可列出已保存 OPDS 服务器 |
 | `opds.save` | 可新增或更新 OPDS 服务器 |
@@ -77,7 +79,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 | 设备 | 普通文件上传接受 | 字体上传接受 | 设备原生可读 |
 |---|---|---|---|
-| Read Pico | EPUB、TXT | 无 | EPUB、TXT |
+| Read Pico | EPUB、TXT | `.ttf` | EPUB、TXT |
 | CrossPoint | 任意文件 | `.cpfont` | EPUB、TXT、Markdown、XTC |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
@@ -86,10 +88,18 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 `font_upload_extensions` 单独声明字体管理接口接受的文件扩展名（不含点号）。
 CrossPoint 当前返回 `cpfont`，因为固件字体上传接口只接受 `.cpfont` 并校验
-`CPFONT` 文件头；Read Pico 返回空列表。上层 App 应读取
+`CPFONT` 文件头；Read Pico 返回 `ttf`，固件只接受带 TrueType 轮廓的完整 TTF。上层 App 应读取
 `DeviceProfile.file_formats.font_upload_extensions` 提供文件选择提示和过滤，
 不得硬编码字体扩展名。此字段与普通图书的 `upload_extensions` 分开，避免将
 字体格式误认为设备可阅读的图书格式。
+仅当设备声明 `fonts.upload.family` 时，App 才要求用户输入字体族名称；Read Pico
+直接按文件名上传，不需要此字段。
+
+Read Pico 的 `/info` 只暴露单组已保存网络的 SSID，不提供多网络列表。
+固件有 `/wifi` 保存和遗忘接口，但仅在设备热点模式允许调用；在已加入现有
+网络的模式下会返回 403。SDK 保留 `wifi.list/save/delete` 能力以表达这些
+实际存在的接口；App 应向用户解释热点模式限制，不应将其当作跨模式可用的
+多网络管理。
 
 SDK 不提供格式转换。App 如需转换，应在调用 SDK 上传前使用其他依赖完成。
 
@@ -122,9 +132,34 @@ client，不代表设备已连接。
 每个调用先检查 profile 中的 capability，未声明时返回 `Unsupported`。文件上传
 和下载使用流式 I/O；修改操作在单个设备 client 内串行执行。
 
+### 多文件操作
+
+`deleteFiles(paths)`、`moveFiles(paths, destination)` 和
+`downloadFiles(files)` 接受多个文件路径。列表不能为空，且同一批次内不能重复路径；
+下载还要求每个远端路径对应一个不同的本地目标路径。
+
+SDK 按设备协议处理批次：CrossPoint 的删除使用 `/delete` 的 `paths` 参数一次发送；
+Read Pico 的删除通过其单路径 `/books?name=...` 接口逐项串行执行。移动和下载当前都
+通过单路径端点逐项串行执行，任一项失败即停止。错误详情包含已完成数量和失败路径；
+先前已完成的文件操作不会回滚。Read Pico 未声明下载和移动能力，这两种调用仍返回
+`Unsupported`。
+
 上传通过 `UploadOptions` 明确冲突策略。CrossPoint 的 `ReplaceWithBackup` 会先
 将旧文件改名为 `<name>.back`，上传并按大小复核，成功后删除备份；失败时尝试
 恢复，恢复失败返回 `RecoveryFailed`。
+
+Read Pico 仅声明 `fonts.upload`；`uploadFont(family, localPath, fileName)` 忽略
+`family`，将 TTF 流式 PUT 至 `/fonts?name=...`，文件大小上限为 32 MiB，
+且必须有已挂载 TF 卡。默认不替换同名字体；明确确认后可调用
+`uploadFontWithOverwrite(family, localPath, fileName, true)`。固件会校验 TTF，
+上传期间暂用内置字体，上传完成后仍需在设备上选用新字体。`GET /fonts`
+只能按文件名查询单个字体，固件没有字体目录列表或删除接口，故不声明
+`fonts.list` 和 `fonts.delete`。
+
+Read Pico 还声明 `fonts.upload.progress`。带进度的字体上传回调反映 SDK 已写入
+HTTP 请求体的文件字节数，达到文件大小后仍需等待固件校验并保存完成响应；
+这不是设备端确认已落盘的进度。固件接收端维护的 `cur_bytes/cur_total` 当前
+没有通过 HTTP 状态接口公开，SDK 不会将它们描述为设备端进度。
 
 CrossPoint 字体接口使用 `/api/fonts`、`/api/fonts/upload` 和
 `/api/fonts/delete`。`listFonts` 返回最大字体族数，以及每个字体族的名称、
@@ -137,8 +172,8 @@ CrossPoint OPDS 接口使用 `/api/opds` 和 `/api/opds/delete`。
 固件省略可选的用户名或 `hasPassword` 时，SDK 分别返回空字符串和 `false`。
 `saveOpdsServer` 的 `index` 为 `null` 时新增，提供索引时更新；更新时
 `password` 为 `null` 会省略请求字段，让固件保留原密码。`deleteOpdsServer`
-按索引删除。以上字体及 OPDS 能力仅在 CrossPoint profile 中声明，Read Pico
-调用会返回 `Unsupported`。
+按索引删除。OPDS 能力仅在 CrossPoint profile 中声明，Read Pico 调用返回
+`Unsupported`。
 
 ## 动态设置
 

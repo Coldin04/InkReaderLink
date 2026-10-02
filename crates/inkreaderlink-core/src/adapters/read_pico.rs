@@ -134,6 +134,27 @@ impl ReadPicoAdapter {
     }
 
     #[must_use]
+    pub fn font_upload_request(path: PathBuf, name: String, overwrite: bool) -> HttpRequest {
+        let mut request = HttpRequest::new(HttpMethod::Put, "/fonts");
+        request.query.push(("name".to_owned(), name));
+        if overwrite {
+            request.query.push(("overwrite".to_owned(), "1".to_owned()));
+        }
+        request.body = HttpBody::RawFile {
+            path,
+            content_type: Some("font/ttf".to_owned()),
+        };
+        request
+    }
+
+    #[must_use]
+    pub fn font_info_request(name: String) -> HttpRequest {
+        let mut request = HttpRequest::new(HttpMethod::Get, "/fonts");
+        request.query.push(("name".to_owned(), name));
+        request
+    }
+
+    #[must_use]
     pub fn delete_request(name: &str) -> HttpRequest {
         let mut request = HttpRequest::new(HttpMethod::Delete, "/books");
         request.query.push(("name".to_owned(), name.to_owned()));
@@ -271,5 +292,24 @@ mod tests {
         );
 
         assert!(matches!(result, Err(SdkError::Unsupported(_))));
+    }
+
+    #[test]
+    fn font_upload_uses_raw_put_and_explicit_replacement() {
+        let request = ReadPicoAdapter::font_upload_request(
+            PathBuf::from("/tmp/font.ttf"),
+            "中文.ttf".to_owned(),
+            true,
+        );
+        assert_eq!(request.method, HttpMethod::Put);
+        assert_eq!(request.path, "/fonts");
+        assert_eq!(
+            request.query,
+            [
+                ("name".to_owned(), "中文.ttf".to_owned()),
+                ("overwrite".to_owned(), "1".to_owned())
+            ]
+        );
+        assert!(matches!(request.body, HttpBody::RawFile { .. }));
     }
 }

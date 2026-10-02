@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// Stable, machine-readable device information item.
@@ -20,6 +22,12 @@ pub struct FileEntry {
     pub path: String,
     pub size: u64,
     pub kind: FileKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDownload {
+    pub path: String,
+    pub destination: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

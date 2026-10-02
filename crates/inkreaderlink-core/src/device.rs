@@ -107,9 +107,12 @@ mod tests {
         assert!(!profile.constraints.can_choose_upload_directory);
         assert!(!profile.file_formats.accepts_any_upload_format);
         assert_eq!(profile.file_formats.upload_extensions, ["epub", "txt"]);
-        assert_eq!(
-            profile.file_formats.font_upload_extensions.as_slice(),
-            &[] as &[String]
+        assert_eq!(profile.file_formats.font_upload_extensions, ["ttf"]);
+        assert!(
+            profile
+                .capabilities
+                .iter()
+                .any(|capability| capability.id() == ids::FONTS_UPLOAD)
         );
         assert!(
             !profile

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -7,9 +8,9 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
-    DeviceKind, DeviceProfile, FileEntry, FileKind, FileLocation, FontCatalog, OpdsCredential,
-    OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions, UploadProgressSink,
-    UploadResult, WifiCredential, WifiNetwork,
+    DeviceKind, DeviceProfile, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog,
+    OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions,
+    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
     adapters::{crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter},
     capability::ids,
     model::ConflictPolicy,
@@ -174,6 +175,45 @@ impl DeviceClient {
         self.execute_success(request, "delete").await
     }
 
+    /// Deletes multiple remote files or empty directories.
+    ///
+    /// CrossPoint uses its multi-path endpoint. Read Pico executes its single-item
+    /// endpoint serially and stops on the first failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, transport, protocol, or capability errors. A serial
+    /// operation error reports how many paths completed before the failure.
+    pub async fn delete_files(&self, paths: Vec<String>) -> Result<(), SdkError> {
+        self.require(ids::FILE_DELETE)?;
+        validate_batch_paths(&paths)?;
+
+        if self.kind == DeviceKind::CrossPoint {
+            let request = CrossPointAdapter::delete_files_request(&paths)?;
+            let _guard = self.mutation.lock().await;
+            return self.execute_success(request, "delete files").await;
+        }
+
+        let names = paths
+            .iter()
+            .map(|path| read_pico_name(path).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        let _guard = self.mutation.lock().await;
+        for (index, (path, name)) in paths.iter().zip(names).enumerate() {
+            let request = ReadPicoAdapter::delete_request(&name);
+            if let Err(error) = self.execute_success(request, "delete").await {
+                return Err(batch_operation_error(
+                    "delete",
+                    index,
+                    paths.len(),
+                    path,
+                    error,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Downloads a remote `CrossPoint` file to a local path using a temporary file.
     ///
     /// # Errors
@@ -185,6 +225,61 @@ impl DeviceClient {
         self.transport
             .download(CrossPointAdapter::download_request(&path), destination)
             .await
+    }
+
+    /// Downloads multiple remote files to their corresponding local destinations.
+    /// Files are streamed one at a time and the operation stops on the first failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, file, transport, or capability errors. The error reports
+    /// how many files completed before the failure; completed downloads are kept.
+    pub async fn download_files(&self, files: Vec<FileDownload>) -> Result<(), SdkError> {
+        self.require(ids::FILE_DOWNLOAD)?;
+        if files.is_empty() {
+            return Err(SdkError::InvalidArgument(
+                "at least one file is required".to_owned(),
+            ));
+        }
+
+        let mut remote_paths = HashSet::with_capacity(files.len());
+        let mut destinations = HashSet::with_capacity(files.len());
+        for file in &files {
+            validate_remote_path(&file.path)?;
+            if file.destination.as_os_str().is_empty() {
+                return Err(SdkError::InvalidArgument(
+                    "download destination must not be empty".to_owned(),
+                ));
+            }
+            if !remote_paths.insert(file.path.as_str()) {
+                return Err(SdkError::InvalidArgument(format!(
+                    "duplicate remote path: {}",
+                    file.path
+                )));
+            }
+            if !destinations.insert(file.destination.as_path()) {
+                return Err(SdkError::InvalidArgument(format!(
+                    "duplicate download destination: {}",
+                    file.destination.display()
+                )));
+            }
+        }
+
+        for (index, file) in files.iter().enumerate() {
+            if let Err(error) = self
+                .download(file.path.clone(), file.destination.clone())
+                .await
+            {
+                return Err(batch_operation_error(
+                    "download",
+                    index,
+                    files.len(),
+                    &file.path,
+                    error,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Creates a remote directory.
@@ -233,6 +328,36 @@ impl DeviceClient {
         let _guard = self.mutation.lock().await;
         self.execute_success(CrossPointAdapter::move_request(&path, &destination), "move")
             .await
+    }
+
+    /// Moves multiple files into an existing directory, serially.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, transport, protocol, or capability errors. The first
+    /// failure stops the operation and reports how many files already moved.
+    pub async fn move_files(
+        &self,
+        paths: Vec<String>,
+        destination: String,
+    ) -> Result<(), SdkError> {
+        self.require(ids::FILE_MOVE)?;
+        validate_batch_paths(&paths)?;
+        validate_remote_path(&destination)?;
+        let _guard = self.mutation.lock().await;
+        for (index, path) in paths.iter().enumerate() {
+            let request = CrossPointAdapter::move_request(path, &destination);
+            if let Err(error) = self.execute_success(request, "move").await {
+                return Err(batch_operation_error(
+                    "move",
+                    index,
+                    paths.len(),
+                    path,
+                    error,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Lists saved Wi-Fi networks visible through the firmware API.
@@ -316,7 +441,7 @@ impl DeviceClient {
         CrossPointAdapter::parse_font_catalog(&response.text_lossy())
     }
 
-    /// Streams a `.cpfont` file into an SD-card font family.
+    /// Streams a device-supported font file. Read Pico rejects same-name files by default.
     /// # Errors
     /// Returns validation, capability, file, transport, or protocol errors.
     pub async fn upload_font(
@@ -325,30 +450,153 @@ impl DeviceClient {
         local_path: PathBuf,
         file_name: String,
     ) -> Result<(), SdkError> {
+        self.upload_font_with_overwrite(family, local_path, file_name, false)
+            .await
+    }
+
+    /// Streams a font file, replacing a same-name Read Pico font only when requested.
+    /// # Errors
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font_with_overwrite(
+        &self,
+        family: String,
+        local_path: PathBuf,
+        file_name: String,
+        overwrite: bool,
+    ) -> Result<(), SdkError> {
+        self.upload_font_with_overwrite_and_progress(family, local_path, file_name, overwrite, None)
+            .await
+    }
+
+    /// Streams a font file and reports bytes supplied to the HTTP request body.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, or protocol errors.
+    pub async fn upload_font_with_progress(
+        &self,
+        family: String,
+        local_path: PathBuf,
+        file_name: String,
+        progress: Arc<dyn UploadProgressSink>,
+    ) -> Result<(), SdkError> {
+        self.upload_font_with_overwrite_and_progress(
+            family,
+            local_path,
+            file_name,
+            false,
+            Some(progress),
+        )
+        .await
+    }
+
+    pub async fn upload_font_with_overwrite_and_progress(
+        &self,
+        family: String,
+        local_path: PathBuf,
+        file_name: String,
+        overwrite: bool,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+    ) -> Result<(), SdkError> {
         self.require(ids::FONTS_UPLOAD)?;
-        validate_font_family(&family)?;
+        if progress.is_some() {
+            self.require(ids::FONTS_UPLOAD_PROGRESS)?;
+        }
         validate_file_name(&file_name)?;
-        if !file_name.to_ascii_lowercase().ends_with(".cpfont") {
+        let extension = Path::new(&file_name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !self
+            .profile
+            .file_formats
+            .font_upload_extensions
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(extension))
+        {
             return Err(SdkError::InvalidArgument(
-                "font file must have a .cpfont extension".to_owned(),
+                "font file extension is not supported by this device".to_owned(),
             ));
         }
-        if tokio::fs::metadata(&local_path)
+        if self.kind == DeviceKind::CrossPoint {
+            validate_font_family(&family)?;
+            if overwrite {
+                return Err(SdkError::Unsupported(
+                    "CrossPoint does not support explicit font overwrite".to_owned(),
+                ));
+            }
+        } else if file_name.len() > 120 {
+            return Err(SdkError::InvalidArgument(
+                "Read Pico font file name exceeds 120 bytes".to_owned(),
+            ));
+        }
+        let size = tokio::fs::metadata(&local_path)
             .await
             .map_err(|error| SdkError::InvalidArgument(format!("cannot read font file: {error}")))?
-            .len()
-            == 0
-        {
+            .len();
+        if size == 0 {
             return Err(SdkError::InvalidArgument(
                 "font file must not be empty".to_owned(),
             ));
         }
+        if self.kind == DeviceKind::ReadPico && size > 32 * 1024 * 1024 {
+            return Err(SdkError::InvalidArgument(
+                "Read Pico font file exceeds 32 MiB".to_owned(),
+            ));
+        }
         let _guard = self.mutation.lock().await;
-        self.execute_success(
-            CrossPointAdapter::font_upload_request(&family, local_path, file_name),
-            "upload font",
-        )
-        .await
+        if self.kind == DeviceKind::ReadPico && !overwrite {
+            // The firmware closes the connection after rejecting a PUT whose
+            // body is still unread. Probe the documented GET endpoint first
+            // so an existing filename becomes a reliable conflict response.
+            let existing = self
+                .transport
+                .execute(ReadPicoAdapter::font_info_request(file_name.clone()))
+                .await?;
+            match existing.status {
+                200 => {
+                    return Err(SdkError::Conflict(format!(
+                        "font already exists: {file_name}"
+                    )));
+                }
+                404 => {}
+                409 => {
+                    return Err(SdkError::Unsupported(
+                        "Read Pico font upload requires a mounted TF card".to_owned(),
+                    ));
+                }
+                _ => ensure_read_pico_success(&existing, "check font before upload")?,
+            }
+        }
+        let request = match self.kind {
+            DeviceKind::ReadPico => {
+                ReadPicoAdapter::font_upload_request(local_path, file_name, overwrite)
+            }
+            DeviceKind::CrossPoint => {
+                CrossPointAdapter::font_upload_request(&family, local_path, file_name)
+            }
+        };
+        let response = self
+            .transport
+            .execute_with_upload_progress(request, progress)
+            .await?;
+        if self.kind == DeviceKind::ReadPico && response.status == 409 {
+            let error = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
+            if error
+                .as_ref()
+                .and_then(|value| value.get("conflict"))
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+            {
+                return Err(SdkError::Unsupported(
+                    "Read Pico font upload requires a mounted TF card".to_owned(),
+                ));
+            }
+        }
+        match self.kind {
+            DeviceKind::ReadPico => ensure_read_pico_success(&response, "upload font"),
+            DeviceKind::CrossPoint => ensure_success(&response, "upload font"),
+        }
     }
 
     /// Deletes an installed font family.
@@ -818,6 +1066,36 @@ fn validate_remote_path(path: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
+fn validate_batch_paths(paths: &[String]) -> Result<(), SdkError> {
+    if paths.is_empty() {
+        return Err(SdkError::InvalidArgument(
+            "at least one file is required".to_owned(),
+        ));
+    }
+    let mut unique = HashSet::with_capacity(paths.len());
+    for path in paths {
+        validate_remote_path(path)?;
+        if !unique.insert(path.as_str()) {
+            return Err(SdkError::InvalidArgument(format!(
+                "duplicate remote path: {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn batch_operation_error(
+    operation: &str,
+    completed: usize,
+    total: usize,
+    path: &str,
+    error: SdkError,
+) -> SdkError {
+    SdkError::RemoteFailure(format!(
+        "batch {operation} stopped after {completed}/{total} files; failed at {path}: {error}. Earlier completed files were not rolled back."
+    ))
+}
+
 fn read_pico_name(path: &str) -> Result<&str, SdkError> {
     let name = path.strip_prefix('/').unwrap_or(path);
     validate_file_name(name)?;
@@ -864,7 +1142,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::transport::{HttpRequest, Transport};
+    use crate::transport::{HttpMethod, HttpRequest, Transport};
 
     #[derive(Debug)]
     struct MockTransport {
@@ -912,6 +1190,59 @@ mod tests {
             status,
             body: body.as_bytes().to_vec(),
         }
+    }
+
+    #[tokio::test]
+    async fn read_pico_font_upload_uses_font_endpoint_and_preserves_conflict() {
+        let transport = MockTransport::new(vec![
+            response(200, r#"{"name":"test.ttf","size":9}"#),
+            response(200, r#"{"ok":true}"#),
+        ]);
+        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"font data").unwrap();
+        let path = file.path().to_path_buf();
+        let first = client
+            .upload_font(String::new(), path.clone(), "test.ttf".to_owned())
+            .await;
+        assert!(matches!(first, Err(SdkError::Conflict(_))));
+        client
+            .upload_font_with_overwrite(String::new(), path, "test.ttf".to_owned(), true)
+            .await
+            .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests[0].method, HttpMethod::Get);
+        assert_eq!(requests[0].path, "/fonts");
+        assert!(
+            requests[0]
+                .query
+                .iter()
+                .any(|(key, value)| key == "name" && value == "test.ttf")
+        );
+        assert_eq!(requests[1].method, HttpMethod::Put);
+        assert_eq!(requests[1].path, "/fonts");
+        assert!(
+            requests[1]
+                .query
+                .iter()
+                .any(|(key, value)| key == "overwrite" && value == "1")
+        );
+    }
+
+    #[tokio::test]
+    async fn read_pico_font_upload_reports_missing_card() {
+        let transport = MockTransport::new(vec![response(409, r#"{"error":"字体需要 TF 卡"}"#)]);
+        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport);
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"font data").unwrap();
+        let result = client
+            .upload_font(
+                String::new(),
+                file.path().to_path_buf(),
+                "test.ttf".to_owned(),
+            )
+            .await;
+        assert!(matches!(result, Err(SdkError::Unsupported(_))));
     }
 
     #[tokio::test]

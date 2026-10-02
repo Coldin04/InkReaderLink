@@ -1,17 +1,76 @@
 //! Internal HTTP and WebSocket transport.
 
-use std::{fmt, path::PathBuf, sync::Arc, time::Duration};
+use std::{fmt, path::PathBuf, sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Body, Client, Method, multipart};
-use tokio::{fs::File, io::AsyncWriteExt, time::timeout};
+use tokio::{
+    fs::File,
+    io::AsyncWriteExt,
+    sync::Notify,
+    time::{Instant as TokioInstant, sleep_until, timeout},
+};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
 use crate::SdkError;
 use crate::UploadProgressSink;
+
+const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug)]
+struct UploadActivity {
+    last_byte_at: std::sync::Mutex<Instant>,
+    changed: Notify,
+}
+
+impl UploadActivity {
+    fn new() -> Self {
+        Self {
+            last_byte_at: std::sync::Mutex::new(Instant::now()),
+            changed: Notify::new(),
+        }
+    }
+
+    fn record(&self) {
+        *self
+            .last_byte_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+        self.changed.notify_one();
+    }
+
+    fn last_byte_at(&self) -> Instant {
+        *self
+            .last_byte_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+async fn send_with_upload_idle_timeout(
+    builder: reqwest::RequestBuilder,
+    activity: Arc<UploadActivity>,
+) -> Result<reqwest::Response, SdkError> {
+    let send = builder.send();
+    tokio::pin!(send);
+    loop {
+        let deadline = TokioInstant::from_std(activity.last_byte_at() + UPLOAD_IDLE_TIMEOUT);
+        let sleep = sleep_until(deadline);
+        tokio::pin!(sleep);
+        tokio::select! {
+            result = &mut send => return result.map_err(map_reqwest_error),
+            () = activity.changed.notified() => {},
+            () = &mut sleep => {
+                if activity.last_byte_at().elapsed() >= UPLOAD_IDLE_TIMEOUT {
+                    return Err(SdkError::Timeout);
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HttpMethod {
@@ -98,6 +157,15 @@ impl fmt::Debug for WebSocketUpload {
 pub trait Transport: Send + Sync + std::fmt::Debug {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError>;
 
+    async fn execute_with_upload_progress(
+        &self,
+        request: HttpRequest,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+    ) -> Result<HttpResponse, SdkError> {
+        let _ = progress;
+        self.execute(request).await
+    }
+
     async fn download(&self, request: HttpRequest, destination: PathBuf) -> Result<(), SdkError>;
 
     async fn upload_websocket(&self, upload: WebSocketUpload) -> Result<(), SdkError> {
@@ -112,6 +180,7 @@ pub trait Transport: Send + Sync + std::fmt::Debug {
 pub struct ReqwestTransport {
     base_url: Url,
     client: Client,
+    upload_client: Client,
 }
 
 impl ReqwestTransport {
@@ -142,10 +211,23 @@ impl ReqwestTransport {
         base_url.set_query(None);
         base_url.set_fragment(None);
         let client = Client::builder()
+            .connect_timeout(timeout)
             .timeout(timeout)
             .build()
             .map_err(map_reqwest_error)?;
-        Ok(Self { base_url, client })
+        // Match the firmware's browser uploader, which does not set an XHR
+        // timeout. Reqwest 0.12 requires a finite request timeout, so use a
+        // 24-hour ceiling while retaining the short connection timeout.
+        let upload_client = Client::builder()
+            .connect_timeout(timeout)
+            .timeout(Duration::from_secs(24 * 60 * 60))
+            .build()
+            .map_err(map_reqwest_error)?;
+        Ok(Self {
+            base_url,
+            client,
+            upload_client,
+        })
     }
 
     fn request_url(&self, request: &HttpRequest) -> Result<Url, SdkError> {
@@ -160,6 +242,9 @@ impl ReqwestTransport {
     async fn request_builder(
         &self,
         request: HttpRequest,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+        long_running_upload: bool,
+        activity: Option<Arc<UploadActivity>>,
     ) -> Result<reqwest::RequestBuilder, SdkError> {
         let url = self.request_url(&request)?;
         let method = match request.method {
@@ -168,7 +253,12 @@ impl ReqwestTransport {
             HttpMethod::Put => Method::PUT,
             HttpMethod::Delete => Method::DELETE,
         };
-        let builder = self.client.request(method, url);
+        let client = if long_running_upload {
+            &self.upload_client
+        } else {
+            &self.client
+        };
+        let builder = client.request(method, url);
         match request.body {
             HttpBody::Empty => Ok(builder),
             HttpBody::Json(body) => Ok(builder
@@ -178,7 +268,32 @@ impl ReqwestTransport {
             HttpBody::RawFile { path, content_type } => {
                 let file = File::open(&path).await.map_err(map_file_error)?;
                 let size = file.metadata().await.map_err(map_file_error)?.len();
-                let body = Body::wrap_stream(ReaderStream::new(file));
+                let stream = ReaderStream::new(file);
+                let body = if let Some(progress) = progress {
+                    let mut sent = 0_u64;
+                    let activity = activity.clone();
+                    Body::wrap_stream(stream.map(move |chunk| {
+                        if let Ok(bytes) = &chunk {
+                            sent = sent.saturating_add(bytes.len() as u64);
+                            if let Some(activity) = &activity {
+                                activity.record();
+                            }
+                            progress.report(sent.min(size), size);
+                        }
+                        chunk
+                    }))
+                } else {
+                    if let Some(activity) = activity {
+                        Body::wrap_stream(stream.map(move |chunk| {
+                            if chunk.is_ok() {
+                                activity.record();
+                            }
+                            chunk
+                        }))
+                    } else {
+                        Body::wrap_stream(stream)
+                    }
+                };
                 let mut builder = builder
                     .header(reqwest::header::CONTENT_LENGTH, size)
                     .body(body);
@@ -229,7 +344,7 @@ impl Transport for ReqwestTransport {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError> {
         let response_limit = request.response_limit;
         let response = self
-            .request_builder(request)
+            .request_builder(request, None, false, None)
             .await?
             .send()
             .await
@@ -249,9 +364,35 @@ impl Transport for ReqwestTransport {
         Ok(HttpResponse { status, body })
     }
 
+    async fn execute_with_upload_progress(
+        &self,
+        request: HttpRequest,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+    ) -> Result<HttpResponse, SdkError> {
+        let response_limit = request.response_limit;
+        let activity = Arc::new(UploadActivity::new());
+        let builder = self
+            .request_builder(request, progress, true, Some(Arc::clone(&activity)))
+            .await?;
+        let response = send_with_upload_idle_timeout(builder, activity).await?;
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(map_reqwest_error)?;
+            if response_limit.is_some_and(|limit| chunk.len() > limit.saturating_sub(body.len())) {
+                return Err(SdkError::RemoteFailure(
+                    "response exceeds size limit".to_owned(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(HttpResponse { status, body })
+    }
+
     async fn download(&self, request: HttpRequest, destination: PathBuf) -> Result<(), SdkError> {
         let response = self
-            .request_builder(request)
+            .request_builder(request, None, false, None)
             .await?
             .send()
             .await
@@ -408,7 +549,10 @@ fn map_reqwest_error(error: reqwest::Error) -> SdkError {
     } else if error.is_connect() {
         SdkError::Unreachable
     } else {
-        SdkError::RemoteFailure(error.to_string())
+        // Reqwest's Display implementation usually only says "error sending
+        // request for url". Include the source chain so stream and socket
+        // failures remain diagnosable in SDK clients.
+        SdkError::RemoteFailure(format!("{error:#}"))
     }
 }
 

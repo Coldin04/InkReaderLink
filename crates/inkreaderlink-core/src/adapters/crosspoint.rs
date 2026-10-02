@@ -132,6 +132,17 @@ impl CrossPointAdapter {
         form_request("/delete", [("path", path)])
     }
 
+    /// Builds the firmware's multi-path delete request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path list cannot be serialized.
+    pub fn delete_files_request(paths: &[String]) -> Result<HttpRequest, SdkError> {
+        let paths = serde_json::to_string(paths)
+            .map_err(|error| SdkError::InvalidArgument(format!("invalid file paths: {error}")))?;
+        Ok(form_request("/delete", [("paths", paths.as_str())]))
+    }
+
     #[must_use]
     pub fn rename_request(path: &str, name: &str) -> HttpRequest {
         form_request("/rename", [("path", path), ("name", name)])
