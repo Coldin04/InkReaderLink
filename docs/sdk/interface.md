@@ -36,7 +36,7 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 变体，下拉值使用从零开始的选项索引，开关使用布尔值。SDK 根据所选设备定义检查字段
 是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
 
-当前 Read Pico 与 CrossPoint 都声明一个必填 `Address` 字段，key 为 `address`。
+当前 Read Pico、CrossPoint 与 kiiko 厂长 Fork 固件都声明一个必填 `Address` 字段，key 为 `address`。
 保存的连接值应随设备记录持久化；旧版仅保存 `address` 的记录可迁移为同名字段。
 设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
 SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
@@ -90,20 +90,24 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | `opds.delete` | 可按索引删除 OPDS 服务器 |
 | `settings.list` | 可读取可编辑设置及控件元数据 |
 | `settings.update` | 可提交部分设置变更 |
+| `wallpapers.upload` | 可上传图片到壁纸库，可选在同一请求中应用为锁屏壁纸 |
+| `wallpapers.manage` | 可列出壁纸库内容并提供管理列表 |
+| `wallpapers.delete` | 允许删除壁纸；仅影响管理列表中的删除操作入口 |
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint |
-|---|---:|---:|
-| `can_list_directories` | false | true |
-| `can_choose_upload_directory` | false | true |
+| 字段 | Read Pico | CrossPoint | kiiko 厂长 Fork 固件 |
+|---|---:|---:|---:|
+| `can_list_directories` | false | true | true |
+| `can_choose_upload_directory` | false | true | false |
 
 固件格式声明：
 
-| 设备 | 普通文件上传接受 | 字体上传接受 | 设备原生可读 |
-|---|---|---|---|
-| Read Pico | EPUB、TXT | `.ttf` | EPUB、TXT |
-| CrossPoint | 任意文件 | `.cpfont` | EPUB、TXT、Markdown、XTC |
+| 设备 | 普通文件上传接受 | 字体上传接受 | 壁纸上传接受 | 设备原生可读 |
+|---|---|---|---|---|
+| Read Pico | EPUB、TXT | `.ttf` | — | EPUB、TXT |
+| CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
+| kiiko 厂长 Fork 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
 `upload_extensions` 过滤。`readable_extensions` 表示设备原生阅读格式。
@@ -115,6 +119,16 @@ CrossPoint 当前返回 `cpfont`，因为固件字体上传接口只接受 `.cpf
 `DeviceProfile.file_formats.font_upload_extensions` 提供文件选择提示和过滤，
 不得硬编码字体扩展名。此字段与普通图书的 `upload_extensions` 分开，避免将
 字体格式误认为设备可阅读的图书格式。
+
+`wallpaper_upload_extensions` 单独声明壁纸上传接口接受的图片扩展名（不含点号）。
+壁纸库操作由 `wallpapers.upload`、`wallpapers.manage` 和 `wallpapers.delete` 分别控制：
+上传能力决定是否提供壁纸上传；管理能力决定是否提供壁纸列表；删除能力只决定列表中
+是否显示删除按钮。SDK 的 `listWallpapers()` 返回 `/pictures` 下受支持格式的普通
+图片文件；`uploadWallpaper(localPath, fileName, overwrite, applyToLockScreen)` 上传图片，
+可选同时设为锁屏壁纸，并返回 `SdkWallpaperUploadResult`。单张上传上限为 20 MiB，
+应用为锁屏壁纸时上限为 2 MiB。若固件已保存图片但设置锁屏壁纸失败，SDK 返回
+`CommittedWithWarning`，表示文件已上传、应用步骤失败。`deleteWallpaper(fileName)`
+按壁纸文件名删除。上述能力仅由 kiiko 厂长 Fork 固件声明。
 仅当设备声明 `fonts.upload.family` 时，App 才要求用户输入字体族名称；Read Pico
 直接按文件名上传，不需要此字段。
 
@@ -138,6 +152,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 
 - `ReadPicoAdapter`：仅接受 `Root`。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
+- `WegoCellForkAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
 
 ## 可调用 API
 
@@ -145,10 +160,11 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 `createDirectory`、`rename`、`moveFile`、`listWifiNetworks`、
 `saveWifiNetwork`、`deleteWifiNetwork`、`listFonts`、`uploadFont`、
 `deleteFontFamily`、`listOpdsServers`、`saveOpdsServer`、`deleteOpdsServer`、
-`listSettings` 和 `applySettings`。
+`listSettings`、`applySettings`、`listWallpapers`、`uploadWallpaper` 和
+`deleteWallpaper`。
 
 实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型请求
-设备信息接口，Read Pico 验证 `/info`，CrossPoint 验证 `/api/status`；只有 HTTP
+设备信息接口，Read Pico 与 kiiko 厂长 Fork 固件验证 `/info`，CrossPoint 验证 `/api/status`；只有 HTTP
 请求成功且响应包含对应设备的信息字段时才返回 client。同步 `connect` 只创建
 client，不代表设备已连接。
 
@@ -237,4 +253,5 @@ IPv4 URL，CrossPoint AP 网页码可能提供 `crosspoint.local`。
 
 - Read Pico 的分页由 SDK 内部处理，上层不感知固件分页参数。
 - CrossPoint 的目录列表由 SDK 转换为相同的 `FileEntry` 列表。
+- kiiko 厂长 Fork 固件的普通文件列表及壁纸列表分页由 SDK 内部处理。
 - App 不应拼接固件 endpoint；位置、分页和协议参数由 SDK 处理。

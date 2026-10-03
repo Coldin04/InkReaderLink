@@ -40,4 +40,7 @@ pub mod ids {
     pub const OPDS_DELETE: &str = "opds.delete";
     pub const SETTINGS_LIST: &str = "settings.list";
     pub const SETTINGS_UPDATE: &str = "settings.update";
+    pub const WALLPAPERS_UPLOAD: &str = "wallpapers.upload";
+    pub const WALLPAPERS_MANAGE: &str = "wallpapers.manage";
+    pub const WALLPAPERS_DELETE: &str = "wallpapers.delete";
 }

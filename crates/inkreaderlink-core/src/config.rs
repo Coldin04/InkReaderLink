@@ -68,12 +68,17 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
     match kind {
         DeviceKind::ReadPico => read_pico_definition(),
         DeviceKind::CrossPoint => crosspoint_definition(),
+        DeviceKind::WegoCellFork => wegooo_cell_fork_definition(),
     }
 }
 
 #[must_use]
 pub fn built_in_definitions() -> Vec<DeviceDefinition> {
-    vec![read_pico_definition(), crosspoint_definition()]
+    vec![
+        read_pico_definition(),
+        crosspoint_definition(),
+        wegooo_cell_fork_definition(),
+    ]
 }
 
 #[must_use]
@@ -84,6 +89,7 @@ pub fn read_pico_definition() -> DeviceDefinition {
             accepts_any_upload_format: false,
             upload_extensions: extensions(&["epub", "txt"]),
             font_upload_extensions: extensions(&["ttf"]),
+            wallpaper_upload_extensions: Vec::new(),
             readable_extensions: extensions(&["epub", "txt"]),
         },
     )
@@ -113,6 +119,7 @@ pub fn crosspoint_definition() -> DeviceDefinition {
             accepts_any_upload_format: true,
             upload_extensions: Vec::new(),
             font_upload_extensions: extensions(&["cpfont"]),
+            wallpaper_upload_extensions: Vec::new(),
             readable_extensions: extensions(&["epub", "txt", "md", "xtc"]),
         },
     )
@@ -151,6 +158,41 @@ pub fn crosspoint_definition() -> DeviceDefinition {
     definition
 }
 
+#[must_use]
+pub fn wegooo_cell_fork_definition() -> DeviceDefinition {
+    let mut definition = DeviceDefinition::upload_only(
+        "wegooo-cell-fork",
+        DeviceFileFormats {
+            accepts_any_upload_format: false,
+            upload_extensions: extensions(&["epub", "txt"]),
+            font_upload_extensions: extensions(&["ttf", "otf"]),
+            wallpaper_upload_extensions: extensions(&["jpg", "jpeg", "png"]),
+            readable_extensions: extensions(&["epub", "txt"]),
+        },
+    )
+    .with_display_name("kiiko 厂长 Fork固件")
+    .with_connection_field(DeviceConnectionField {
+        key: "address".to_owned(),
+        label: "设备地址".to_owned(),
+        kind: DeviceConnectionFieldKind::Address,
+        required: true,
+    })
+    .with_capability(ids::DEVICE_INFO)
+    .with_capability(ids::FILE_LIST)
+    .with_capability(ids::FILE_DIRECTORY_LIST)
+    .with_capability(ids::FILE_DELETE)
+    .with_capability(ids::UPLOAD_EXPLICIT_OVERWRITE)
+    .with_capability(ids::FONTS_UPLOAD)
+    .with_capability(ids::WIFI_LIST)
+    .with_capability(ids::WIFI_SAVE)
+    .with_capability(ids::WIFI_DELETE)
+    .with_capability(ids::WALLPAPERS_UPLOAD)
+    .with_capability(ids::WALLPAPERS_MANAGE)
+    .with_capability(ids::WALLPAPERS_DELETE);
+    definition.constraints.can_list_directories = true;
+    definition
+}
+
 fn extensions(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
@@ -167,6 +209,7 @@ mod tests {
                 accepts_any_upload_format: false,
                 upload_extensions: vec!["epub".to_owned()],
                 font_upload_extensions: Vec::new(),
+                wallpaper_upload_extensions: Vec::new(),
                 readable_extensions: vec!["epub".to_owned()],
             },
         );

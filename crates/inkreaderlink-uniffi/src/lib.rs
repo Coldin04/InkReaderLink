@@ -11,8 +11,8 @@ use inkreaderlink_core::{
     DeviceConstraints, DeviceFileFormats, DeviceInfoField, DeviceKind, DeviceProfile, FileDownload,
     FileEntry, FileKind, FileLocation, FontCatalog, FontFamily, FontFile, OpdsCredential,
     OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind, SettingValue,
-    SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
-    built_in_definitions,
+    SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult, WallpaperUploadResult,
+    WifiCredential, WifiNetwork, built_in_definitions,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -104,6 +104,21 @@ impl From<SdkFileDownload> for FileDownload {
 pub struct SdkUploadResult {
     pub entry: SdkFileEntry,
     pub used_websocket: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkWallpaperUploadResult {
+    pub entry: SdkFileEntry,
+    pub applied_to_lock_screen: bool,
+}
+
+impl From<WallpaperUploadResult> for SdkWallpaperUploadResult {
+    fn from(result: WallpaperUploadResult) -> Self {
+        Self {
+            entry: result.entry.into(),
+            applied_to_lock_screen: result.applied_to_lock_screen,
+        }
+    }
 }
 
 impl From<UploadResult> for SdkUploadResult {
@@ -552,6 +567,7 @@ pub struct SdkDeviceFileFormats {
     pub accepts_any_upload_format: bool,
     pub upload_extensions: Vec<String>,
     pub font_upload_extensions: Vec<String>,
+    pub wallpaper_upload_extensions: Vec<String>,
     pub readable_extensions: Vec<String>,
 }
 
@@ -561,6 +577,7 @@ impl From<DeviceFileFormats> for SdkDeviceFileFormats {
             accepts_any_upload_format: formats.accepts_any_upload_format,
             upload_extensions: formats.upload_extensions,
             font_upload_extensions: formats.font_upload_extensions,
+            wallpaper_upload_extensions: formats.wallpaper_upload_extensions,
             readable_extensions: formats.readable_extensions,
         }
     }
@@ -726,6 +743,7 @@ impl SdkDeviceClient {
         let kind = match device_type.as_str() {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
+            "wegooo-cell-fork" => DeviceKind::WegoCellFork,
             _ => {
                 return Err(SdkOperationError::Unsupported {
                     detail: format!("unknown device type: {device_type}"),
@@ -864,6 +882,59 @@ impl SdkDeviceClient {
     pub async fn delete_files(&self, paths: Vec<String>) -> Result<(), SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move { inner.delete_files(paths).await }).await
+    }
+
+    /// Lists images managed as wallpapers by the selected firmware.
+    ///
+    /// # Errors
+    ///
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_wallpapers(&self) -> Result<Vec<SdkFileEntry>, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .list_wallpapers()
+                .await
+                .map(|entries| entries.into_iter().map(Into::into).collect())
+        })
+        .await
+    }
+
+    /// Uploads a wallpaper image and optionally applies it to the lock screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, conflict, or protocol errors.
+    pub async fn upload_wallpaper(
+        &self,
+        local_path: String,
+        file_name: String,
+        overwrite: bool,
+        apply_to_lock_screen: bool,
+    ) -> Result<SdkWallpaperUploadResult, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_wallpaper(
+                    PathBuf::from(local_path),
+                    file_name,
+                    overwrite,
+                    apply_to_lock_screen,
+                )
+                .await
+                .map(Into::into)
+        })
+        .await
+    }
+
+    /// Deletes one wallpaper image by its file name.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn delete_wallpaper(&self, file_name: String) -> Result<(), SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move { inner.delete_wallpaper(file_name).await }).await
     }
 
     /// Streams a remote file to a local destination.
@@ -1174,6 +1245,7 @@ impl BooksendSdk {
         let kind = match device_type.as_str() {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
+            "wegooo-cell-fork" => DeviceKind::WegoCellFork,
             _ => return None,
         };
         Some(DeviceProfile::baseline(kind).into())

@@ -65,6 +65,7 @@ pub struct DeviceFileFormats {
     pub accepts_any_upload_format: bool,
     pub upload_extensions: Vec<String>,
     pub font_upload_extensions: Vec<String>,
+    pub wallpaper_upload_extensions: Vec<String>,
     pub readable_extensions: Vec<String>,
 }
 
@@ -190,6 +191,12 @@ pub struct SettingChange {
 pub struct UploadResult {
     pub entry: FileEntry,
     pub used_websocket: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WallpaperUploadResult {
+    pub entry: FileEntry,
+    pub applied_to_lock_screen: bool,
 }
 
 pub trait UploadProgressSink: Send + Sync {

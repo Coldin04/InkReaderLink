@@ -10,8 +10,11 @@ use tokio::sync::Mutex;
 use crate::{
     DeviceKind, DeviceProfile, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog,
     OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions,
-    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
-    adapters::{crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter},
+    UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential, WifiNetwork,
+    adapters::{
+        crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter,
+        wegooo_cell_fork::WegoCellForkAdapter,
+    },
     capability::ids,
     model::ConflictPolicy,
     settings::{encode_changes, parse_settings},
@@ -61,12 +64,14 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
             DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::info_request(),
         };
         let response = self.transport.execute(request).await?;
         ensure_success(&response, "verify device connection")?;
         match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::validate_info(&response.body),
             DeviceKind::CrossPoint => CrossPointAdapter::validate_status(&response.body),
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::validate_info(&response.body),
         }
     }
 
@@ -81,12 +86,14 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
             DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::info_request(),
         };
         let response = self.transport.execute(request).await?;
         ensure_success(&response, "get device info")?;
         match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::parse_info(&response.body),
             DeviceKind::CrossPoint => CrossPointAdapter::parse_status(&response.body),
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::parse_info(&response.body),
         }
     }
 
@@ -103,6 +110,7 @@ impl DeviceClient {
         match self.kind {
             DeviceKind::ReadPico => self.list_read_pico(location).await,
             DeviceKind::CrossPoint => self.list_crosspoint(&location).await,
+            DeviceKind::WegoCellFork => self.list_wegooo_cell_fork(&location).await,
         }
     }
 
@@ -146,6 +154,11 @@ impl DeviceClient {
                 self.upload_crosspoint(&local_path, &file_name, &location, &options, progress)
                     .await?
             }
+            DeviceKind::WegoCellFork => {
+                self.upload_wegooo_cell_fork(local_path, file_name.clone(), options)
+                    .await?;
+                false
+            }
         };
         let path = join_location(&location, &file_name);
         Ok(UploadResult {
@@ -171,6 +184,10 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::delete_request(read_pico_name(&path)?),
             DeviceKind::CrossPoint => CrossPointAdapter::delete_request(&path),
+            DeviceKind::WegoCellFork => {
+                let relative = path.strip_prefix('/').unwrap_or(&path);
+                WegoCellForkAdapter::delete_path_request(relative)?
+            }
         };
         self.execute_success(request, "delete").await
     }
@@ -196,11 +213,21 @@ impl DeviceClient {
 
         let names = paths
             .iter()
-            .map(|path| read_pico_name(path).map(str::to_owned))
+            .map(|path| {
+                if self.kind == DeviceKind::ReadPico {
+                    read_pico_name(path).map(str::to_owned)
+                } else {
+                    Ok(path.strip_prefix('/').unwrap_or(path).to_owned())
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let _guard = self.mutation.lock().await;
         for (index, (path, name)) in paths.iter().zip(names).enumerate() {
-            let request = ReadPicoAdapter::delete_request(&name);
+            let request = match self.kind {
+                DeviceKind::ReadPico => ReadPicoAdapter::delete_request(&name),
+                DeviceKind::WegoCellFork => WegoCellForkAdapter::delete_path_request(&name)?,
+                DeviceKind::CrossPoint => unreachable!("CrossPoint exits through batch endpoint"),
+            };
             if let Err(error) = self.execute_success(request, "delete").await {
                 return Err(batch_operation_error(
                     "delete",
@@ -378,12 +405,18 @@ impl DeviceClient {
                     .execute(CrossPointAdapter::wifi_list_request())
                     .await?
             }
+            DeviceKind::WegoCellFork => {
+                self.transport
+                    .execute(WegoCellForkAdapter::info_request())
+                    .await?
+            }
         };
         ensure_success(&response, "list Wi-Fi networks")?;
         let body = response.text_lossy();
         match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::parse_wifi_info(&body),
             DeviceKind::CrossPoint => CrossPointAdapter::parse_wifi_list(&body),
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::parse_wifi_info(&body),
         }
     }
 
@@ -403,6 +436,7 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::wifi_save_request(&credential)?,
             DeviceKind::CrossPoint => CrossPointAdapter::wifi_save_request(&credential)?,
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::wifi_save_request(&credential)?,
         };
         self.execute_success(request, "save Wi-Fi network").await
     }
@@ -424,8 +458,146 @@ impl DeviceClient {
                     )
                 })?)?
             }
+            DeviceKind::WegoCellFork => WegoCellForkAdapter::wifi_delete_request(),
         };
         self.execute_success(request, "delete Wi-Fi network").await
+    }
+
+    /// Lists wallpaper images stored on the Fork firmware's TF card.
+    ///
+    /// # Errors
+    ///
+    /// Returns capability, transport, or protocol errors.
+    pub async fn list_wallpapers(&self) -> Result<Vec<FileEntry>, SdkError> {
+        self.require(ids::WALLPAPERS_MANAGE)?;
+        let mut page_index = 0;
+        let mut entries = Vec::new();
+        loop {
+            let response = self
+                .transport
+                .execute(WegoCellForkAdapter::wallpapers_list_request(page_index))
+                .await?;
+            ensure_wegooo_cell_fork_success(&response, "list wallpapers")?;
+            let page = WegoCellForkAdapter::parse_wallpaper_page(&response.text_lossy())?;
+            entries.extend(page.entries);
+            page_index += 1;
+            if page_index >= page.pages {
+                return Ok(entries);
+            }
+        }
+    }
+
+    /// Uploads an image into the wallpaper library, optionally applying it as
+    /// the lock-screen wallpaper in the same firmware request.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, conflict, or protocol errors.
+    pub async fn upload_wallpaper(
+        &self,
+        local_path: PathBuf,
+        file_name: String,
+        overwrite: bool,
+        apply_to_lock_screen: bool,
+    ) -> Result<WallpaperUploadResult, SdkError> {
+        self.require(ids::WALLPAPERS_UPLOAD)?;
+        validate_file_name(&file_name)?;
+        let extension = Path::new(&file_name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !self
+            .profile
+            .file_formats
+            .wallpaper_upload_extensions
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(extension))
+        {
+            return Err(SdkError::InvalidArgument(
+                "wallpaper image extension is not supported by this device".to_owned(),
+            ));
+        }
+        let size = tokio::fs::metadata(&local_path)
+            .await
+            .map_err(|error| {
+                SdkError::InvalidArgument(format!("cannot read wallpaper image: {error}"))
+            })?
+            .len();
+        if size == 0 {
+            return Err(SdkError::InvalidArgument(
+                "wallpaper image must not be empty".to_owned(),
+            ));
+        }
+        if size > 20 * 1024 * 1024 {
+            return Err(SdkError::InvalidArgument(
+                "wallpaper image exceeds 20 MiB".to_owned(),
+            ));
+        }
+        if apply_to_lock_screen && size > 2 * 1024 * 1024 {
+            return Err(SdkError::InvalidArgument(
+                "lock-screen wallpaper image exceeds 2 MiB".to_owned(),
+            ));
+        }
+
+        let _guard = self.mutation.lock().await;
+        let response = self
+            .transport
+            .execute(WegoCellForkAdapter::wallpaper_upload_request(
+                local_path,
+                file_name.clone(),
+                overwrite,
+                apply_to_lock_screen,
+            ))
+            .await?;
+        let body = response.text_lossy();
+        if apply_to_lock_screen
+            && response.status == 500
+            && body.contains("图片已上传，但设置锁屏壁纸失败")
+        {
+            return Err(SdkError::CommittedWithWarning(body));
+        }
+        ensure_wegooo_cell_fork_success(&response, "upload wallpaper")?;
+        Ok(WallpaperUploadResult {
+            entry: FileEntry {
+                name: file_name.clone(),
+                path: format!("/pictures/{file_name}"),
+                size,
+                kind: FileKind::Other,
+            },
+            applied_to_lock_screen: apply_to_lock_screen,
+        })
+    }
+
+    /// Deletes one image from the wallpaper library.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, transport, or protocol errors.
+    pub async fn delete_wallpaper(&self, file_name: String) -> Result<(), SdkError> {
+        self.require(ids::WALLPAPERS_DELETE)?;
+        validate_file_name(&file_name)?;
+        if !self
+            .profile
+            .file_formats
+            .wallpaper_upload_extensions
+            .iter()
+            .any(|allowed| {
+                Path::new(&file_name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| allowed.eq_ignore_ascii_case(extension))
+            })
+        {
+            return Err(SdkError::InvalidArgument(
+                "file is not a supported wallpaper image".to_owned(),
+            ));
+        }
+        let _guard = self.mutation.lock().await;
+        self.execute_success(
+            WegoCellForkAdapter::delete_wallpaper_request(&file_name)?,
+            "delete wallpaper",
+        )
+        .await
     }
 
     /// Lists installed SD-card font families.
@@ -539,9 +711,9 @@ impl DeviceClient {
                 "font file must not be empty".to_owned(),
             ));
         }
-        if self.kind == DeviceKind::ReadPico && size > 32 * 1024 * 1024 {
+        if self.kind != DeviceKind::CrossPoint && size > 32 * 1024 * 1024 {
             return Err(SdkError::InvalidArgument(
-                "Read Pico font file exceeds 32 MiB".to_owned(),
+                "font file exceeds 32 MiB".to_owned(),
             ));
         }
         let _guard = self.mutation.lock().await;
@@ -575,6 +747,9 @@ impl DeviceClient {
             DeviceKind::CrossPoint => {
                 CrossPointAdapter::font_upload_request(&family, local_path, file_name)
             }
+            DeviceKind::WegoCellFork => {
+                WegoCellForkAdapter::font_upload_request(local_path, file_name, overwrite)
+            }
         };
         let response = self
             .transport
@@ -596,6 +771,7 @@ impl DeviceClient {
         match self.kind {
             DeviceKind::ReadPico => ensure_read_pico_success(&response, "upload font"),
             DeviceKind::CrossPoint => ensure_success(&response, "upload font"),
+            DeviceKind::WegoCellFork => ensure_wegooo_cell_fork_success(&response, "upload font"),
         }
     }
 
@@ -727,6 +903,27 @@ impl DeviceClient {
         }
     }
 
+    async fn list_wegooo_cell_fork(
+        &self,
+        location: &FileLocation,
+    ) -> Result<Vec<FileEntry>, SdkError> {
+        let mut page_index = 0;
+        let mut entries = Vec::new();
+        loop {
+            let response = self
+                .transport
+                .execute(WegoCellForkAdapter::file_list_request(location, page_index))
+                .await?;
+            ensure_wegooo_cell_fork_success(&response, "list files")?;
+            let page = WegoCellForkAdapter::parse_file_page(location, &response.text_lossy())?;
+            entries.extend(page.entries);
+            page_index += 1;
+            if page_index >= page.pages {
+                return Ok(entries);
+            }
+        }
+    }
+
     async fn list_crosspoint(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
         let response = self
             .transport
@@ -765,6 +962,33 @@ impl DeviceClient {
             ))
             .await?;
         ensure_read_pico_success(&response, "upload")
+    }
+
+    async fn upload_wegooo_cell_fork(
+        &self,
+        local_path: PathBuf,
+        file_name: String,
+        options: UploadOptions,
+    ) -> Result<(), SdkError> {
+        let overwrite = match options.conflict_policy {
+            ConflictPolicy::Fail => false,
+            ConflictPolicy::OverwriteWhenSupported => {
+                self.require(ids::UPLOAD_EXPLICIT_OVERWRITE)?;
+                true
+            }
+            ConflictPolicy::ReplaceWithBackup => {
+                return Err(SdkError::Unsupported(
+                    "wegooo-cell-fork uses the firmware's explicit overwrite operation".to_owned(),
+                ));
+            }
+        };
+        let response = self
+            .transport
+            .execute(WegoCellForkAdapter::book_upload_request(
+                local_path, file_name, overwrite,
+            ))
+            .await?;
+        ensure_wegooo_cell_fork_success(&response, "upload")
     }
 
     async fn upload_crosspoint(
@@ -946,6 +1170,7 @@ impl DeviceClient {
         match self.kind {
             DeviceKind::ReadPico => ensure_read_pico_success(&response, operation),
             DeviceKind::CrossPoint => ensure_success(&response, operation),
+            DeviceKind::WegoCellFork => ensure_wegooo_cell_fork_success(&response, operation),
         }
     }
 
@@ -1008,6 +1233,23 @@ fn ensure_success(response: &HttpResponse, operation: &str) -> Result<(), SdkErr
         400 if message.to_ascii_lowercase().contains("exist") => Err(SdkError::Conflict(message)),
         _ => Err(SdkError::RemoteFailure(format!(
             "{operation} failed with HTTP {}: {message}",
+            response.status
+        ))),
+    }
+}
+
+fn ensure_wegooo_cell_fork_success(
+    response: &HttpResponse,
+    operation: &str,
+) -> Result<(), SdkError> {
+    let body = response.text_lossy();
+    match response.status {
+        200..=299 => Ok(()),
+        408 => Err(SdkError::Timeout),
+        409 => Err(SdkError::Conflict(body)),
+        413 | 507 => Err(SdkError::InsufficientStorage),
+        _ => Err(SdkError::RemoteFailure(format!(
+            "{operation} failed with HTTP {}: {body}",
             response.status
         ))),
     }

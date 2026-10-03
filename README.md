@@ -6,6 +6,12 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 界面以及分享菜单等平台原生能力。不同固件通过内部 adapter 隔离，统一向
 上层返回设备信息、能力声明、文件模型和操作结果。
 
+## 已适配固件
+
+- [Read Pico 官方固件](https://github.com/MindReset/read_pico_firmware)
+- [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) （在 [CrossMux](https://github.com/0x1abin/crossmux) 上测试通过)
+- [kiiko 厂长 Fork 固件](https://github.com/wegooo-cell/read-pico-reader)
+
 ## 当前目标
 
 - 支持 Read Pico 和 CrossPoint。

@@ -16,5 +16,5 @@ pub use model::{
     DeviceFileFormats, DeviceInfoField, FileDownload, FileEntry, FileKind, FileLocation,
     FontCatalog, FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange,
     SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot, UploadOptions,
-    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
+    UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential, WifiNetwork,
 };
