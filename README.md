@@ -1,10 +1,12 @@
 # InkReaderLink
 
-InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层（device bridge），为 App、未来的 Flutter 客户端和服务端提供统一设备能力。Rust 核心 crate `inkreaderlink-core` 管理设备能力、协议 adapter 和通用业务逻辑；UniFFI crate `inkreaderlink-uniffi` 将核心 API 映射为 iOS 与 Android 接口。
+InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层（device bridge），为多种客户端和服务端提供统一设备能力。
+管理设备能力、协议 adapter 和通用业务逻辑由 Rust 核心 crate `inkreaderlink-core` 实现；核心 API 通过 UniFFI crate `inkreaderlink-uniffi`映射为 iOS 与 Android 接口。
 
-核心负责设备发现、设备能力识别、文件传输和文件管理。接入层负责
-界面以及分享菜单等平台原生能力。不同固件通过内部 adapter 隔离，统一向
-上层返回设备信息、能力声明、文件模型和操作结果。
+项目将接入能力设计分为多层。
+核心负责 设备发现、设备能力识别、文件传输和文件管理 等能力。
+接入层负责 界面以及分享菜单等平台原生能力通信。
+不同固件通过内部 adapter 隔离，统一向上层返回设备信息、能力声明、文件模型和操作结果。
 
 ## 已适配固件
 
