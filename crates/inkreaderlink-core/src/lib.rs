@@ -9,11 +9,12 @@ pub mod transport;
 
 pub use capability::Capability;
 pub use client::DeviceClient;
-pub use config::{DeviceDefinition, built_in_definition};
+pub use config::{DeviceDefinition, built_in_definition, built_in_definitions};
 pub use device::{DeviceIdentity, DeviceKind, DeviceProfile, route_device};
 pub use model::{
-    ConflictPolicy, DeviceConstraints, DeviceFileFormats, DeviceInfoField, FileDownload, FileEntry,
-    FileKind, FileLocation, FontCatalog, FontFamily, FontFile, OpdsCredential, OpdsServer,
-    SdkError, SettingChange, SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot,
-    UploadOptions, UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
+    ConflictPolicy, DeviceConnectionField, DeviceConnectionFieldKind, DeviceConstraints,
+    DeviceFileFormats, DeviceInfoField, FileDownload, FileEntry, FileKind, FileLocation,
+    FontCatalog, FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange,
+    SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot, UploadOptions,
+    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
 };

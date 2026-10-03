@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     future::Future,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -6,11 +7,12 @@ use std::{
 };
 
 use inkreaderlink_core::{
-    Capability, ConflictPolicy, DeviceClient, DeviceConstraints, DeviceFileFormats,
-    DeviceInfoField, DeviceKind, DeviceProfile, FileDownload, FileEntry, FileKind, FileLocation,
-    FontCatalog, FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange,
-    SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot, UploadOptions,
-    UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
+    Capability, ConflictPolicy, DeviceClient, DeviceConnectionField, DeviceConnectionFieldKind,
+    DeviceConstraints, DeviceFileFormats, DeviceInfoField, DeviceKind, DeviceProfile, FileDownload,
+    FileEntry, FileKind, FileLocation, FontCatalog, FontFamily, FontFile, OpdsCredential,
+    OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind, SettingValue,
+    SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult, WifiCredential, WifiNetwork,
+    built_in_definitions,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -441,6 +443,79 @@ pub struct SdkDeviceProfile {
     pub file_formats: SdkDeviceFileFormats,
 }
 
+#[derive(Clone, Debug, uniffi::Enum)]
+pub enum SdkConnectionFieldKind {
+    Text,
+    Address,
+    Choice { options: Vec<String> },
+    Toggle,
+}
+
+impl From<DeviceConnectionFieldKind> for SdkConnectionFieldKind {
+    fn from(kind: DeviceConnectionFieldKind) -> Self {
+        match kind {
+            DeviceConnectionFieldKind::Text => Self::Text,
+            DeviceConnectionFieldKind::Address => Self::Address,
+            DeviceConnectionFieldKind::Choice { options } => Self::Choice { options },
+            DeviceConnectionFieldKind::Toggle => Self::Toggle,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkConnectionField {
+    pub key: String,
+    pub label: String,
+    pub kind: SdkConnectionFieldKind,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Enum)]
+pub enum SdkConnectionValue {
+    Text { value: String },
+    Address { value: String },
+    Choice { index: u32 },
+    Toggle { value: bool },
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkConnectionParameter {
+    pub key: String,
+    pub value: SdkConnectionValue,
+}
+
+impl From<DeviceConnectionField> for SdkConnectionField {
+    fn from(field: DeviceConnectionField) -> Self {
+        Self {
+            key: field.key,
+            label: field.label,
+            kind: field.kind.into(),
+            required: field.required,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkSupportedDevice {
+    pub device_type: String,
+    pub display_name: String,
+    pub connection_fields: Vec<SdkConnectionField>,
+}
+
+impl From<inkreaderlink_core::DeviceDefinition> for SdkSupportedDevice {
+    fn from(definition: inkreaderlink_core::DeviceDefinition) -> Self {
+        Self {
+            device_type: definition.device_type,
+            display_name: definition.display_name,
+            connection_fields: definition
+                .connection_fields
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
 /// Machine-readable item for a device information page. Localize `key` in the app.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct SdkDeviceInfoField {
@@ -559,6 +634,81 @@ where
         .map_err(Into::into)
 }
 
+fn resolve_connection_address(
+    device_type: &str,
+    parameters: Vec<SdkConnectionParameter>,
+) -> Result<String, SdkOperationError> {
+    let definition = built_in_definitions()
+        .into_iter()
+        .find(|definition| definition.device_type == device_type)
+        .ok_or_else(|| SdkOperationError::Unsupported {
+            detail: format!("unknown device type: {device_type}"),
+        })?;
+    let address_fields = definition
+        .connection_fields
+        .iter()
+        .filter(|field| field.kind == DeviceConnectionFieldKind::Address)
+        .count();
+    if address_fields != 1 {
+        return Err(SdkOperationError::InvalidArgument {
+            detail: "device definition must declare exactly one address field".to_owned(),
+        });
+    }
+
+    let mut seen = HashSet::new();
+    let mut address = None;
+    for parameter in parameters {
+        if !seen.insert(parameter.key.clone()) {
+            return Err(SdkOperationError::InvalidArgument {
+                detail: format!("duplicate connection field: {}", parameter.key),
+            });
+        }
+        let field = definition
+            .connection_fields
+            .iter()
+            .find(|field| field.key == parameter.key)
+            .ok_or_else(|| SdkOperationError::InvalidArgument {
+                detail: format!("unknown connection field: {}", parameter.key),
+            })?;
+        let valid = match (&field.kind, &parameter.value) {
+            (DeviceConnectionFieldKind::Text, SdkConnectionValue::Text { .. }) => true,
+            (DeviceConnectionFieldKind::Address, SdkConnectionValue::Address { value }) => {
+                address = Some(value.clone());
+                true
+            }
+            (
+                DeviceConnectionFieldKind::Choice { options },
+                SdkConnectionValue::Choice { index },
+            ) => usize::try_from(*index).is_ok_and(|index| index < options.len()),
+            (DeviceConnectionFieldKind::Toggle, SdkConnectionValue::Toggle { .. }) => true,
+            _ => false,
+        };
+        if !valid {
+            return Err(SdkOperationError::InvalidArgument {
+                detail: format!("invalid value for connection field: {}", parameter.key),
+            });
+        }
+    }
+
+    for field in definition
+        .connection_fields
+        .iter()
+        .filter(|field| field.required)
+    {
+        if !seen.contains(&field.key) {
+            return Err(SdkOperationError::InvalidArgument {
+                detail: format!("missing required connection field: {}", field.key),
+            });
+        }
+    }
+
+    address
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| SdkOperationError::InvalidArgument {
+            detail: "device address is required".to_owned(),
+        })
+}
+
 #[uniffi::export]
 impl SdkDeviceClient {
     /// Connects a typed device client to an HTTP origin.
@@ -607,6 +757,23 @@ impl SdkDeviceClient {
         let inner = Arc::clone(&client.inner);
         run_on_sdk_runtime(async move { inner.verify_connection().await }).await?;
         Ok(client)
+    }
+
+    /// Connects after validating the typed fields declared for the selected device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unknown, duplicate, missing, or mistyped fields, or when
+    /// the device address cannot be reached or verified.
+    #[uniffi::constructor]
+    #[allow(clippy::needless_pass_by_value)]
+    pub async fn connect_and_verify_with_parameters(
+        device_type: String,
+        parameters: Vec<SdkConnectionParameter>,
+        timeout_ms: u64,
+    ) -> Result<Arc<Self>, SdkOperationError> {
+        let address = resolve_connection_address(&device_type, parameters)?;
+        Self::connect_and_verify(device_type, address, timeout_ms).await
     }
 
     #[must_use]
@@ -993,6 +1160,12 @@ impl BooksendSdk {
     #[must_use]
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_owned()
+    }
+
+    /// Lists SDK-supported devices and the fields required to configure each connection.
+    #[must_use]
+    pub fn supported_devices(&self) -> Vec<SdkSupportedDevice> {
+        built_in_definitions().into_iter().map(Into::into).collect()
     }
 
     #[must_use]

@@ -1,10 +1,15 @@
 //! Built-in device declarations and configurable device definitions.
 
-use crate::{Capability, DeviceConstraints, DeviceFileFormats, DeviceKind, capability::ids};
+use crate::{
+    Capability, DeviceConnectionField, DeviceConnectionFieldKind, DeviceConstraints,
+    DeviceFileFormats, DeviceKind, capability::ids,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceDefinition {
     pub device_type: String,
+    pub display_name: String,
+    pub connection_fields: Vec<DeviceConnectionField>,
     pub capabilities: Vec<Capability>,
     pub constraints: DeviceConstraints,
     pub file_formats: DeviceFileFormats,
@@ -15,6 +20,8 @@ impl DeviceDefinition {
     pub fn upload_only(device_type: impl Into<String>, file_formats: DeviceFileFormats) -> Self {
         Self {
             device_type: device_type.into(),
+            display_name: String::new(),
+            connection_fields: Vec::new(),
             capabilities: vec![Capability::new(ids::FILE_UPLOAD)],
             constraints: DeviceConstraints {
                 can_list_directories: false,
@@ -22,6 +29,18 @@ impl DeviceDefinition {
             },
             file_formats,
         }
+    }
+
+    #[must_use]
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = display_name.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_connection_field(mut self, field: DeviceConnectionField) -> Self {
+        self.connection_fields.push(field);
+        self
     }
 
     #[must_use]
@@ -53,6 +72,11 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
 }
 
 #[must_use]
+pub fn built_in_definitions() -> Vec<DeviceDefinition> {
+    vec![read_pico_definition(), crosspoint_definition()]
+}
+
+#[must_use]
 pub fn read_pico_definition() -> DeviceDefinition {
     DeviceDefinition::upload_only(
         "read-pico",
@@ -63,6 +87,13 @@ pub fn read_pico_definition() -> DeviceDefinition {
             readable_extensions: extensions(&["epub", "txt"]),
         },
     )
+    .with_display_name("Read Pico")
+    .with_connection_field(DeviceConnectionField {
+        key: "address".to_owned(),
+        label: "设备地址".to_owned(),
+        kind: DeviceConnectionFieldKind::Address,
+        required: true,
+    })
     .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
     .with_capability(ids::FILE_DELETE)
@@ -85,6 +116,13 @@ pub fn crosspoint_definition() -> DeviceDefinition {
             readable_extensions: extensions(&["epub", "txt", "md", "xtc"]),
         },
     )
+    .with_display_name("CrossPoint")
+    .with_connection_field(DeviceConnectionField {
+        key: "address".to_owned(),
+        label: "设备地址".to_owned(),
+        kind: DeviceConnectionFieldKind::Address,
+        required: true,
+    })
     .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
     .with_capability(ids::FILE_DIRECTORY_LIST)

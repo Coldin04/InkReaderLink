@@ -30,6 +30,24 @@ pub struct FileDownload {
     pub destination: PathBuf,
 }
 
+/// Input widget and accepted values for configuring a supported device connection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceConnectionFieldKind {
+    Text,
+    Address,
+    Choice { options: Vec<String> },
+    Toggle,
+}
+
+/// A device-specific value the app should collect before saving a connection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceConnectionField {
+    pub key: String,
+    pub label: String,
+    pub kind: DeviceConnectionFieldKind,
+    pub required: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FileLocation {
     Root,

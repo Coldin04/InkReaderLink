@@ -25,7 +25,7 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 │   │       │   ├── read_pico.rs   # Read Pico 协议 adapter
 │   │       │   └── mod.rs
 │   │       ├── capability.rs      # 能力声明模型
-│   │       ├── config.rs          # 设备能力、约束和格式配置
+│   │       ├── config.rs          # 支持设备、连接字段、能力、约束和格式配置
 │   │       ├── client.rs          # 统一设备操作与 capability 门控
 │   │       ├── device.rs          # 设备类型与路由
 │   │       ├── model.rs           # 通用文件、上传和错误模型
@@ -55,6 +55,10 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 当前提供 Read Pico 与 CrossPoint 的文件和 Wi-Fi 操作，以及 CrossPoint 的字体、
 OPDS 服务器和动态设置管理；具体能力见 [SDK 接口文档](docs/sdk/interface.md)。
+
+Android/iOS 上层通过 `BooksendSdk.supportedDevices()` 查询支持的固件名称及连接表单字段，
+按 SDK 声明动态渲染文本框、地址框、下拉列表或开关。新增设备时，应在 `DeviceDefinition`
+中同时补充显示名称与必填连接字段，并更新 [SDK 接口文档](docs/sdk/interface.md)。
 
 `DeviceProfile.file_formats.font_upload_extensions` 返回字体管理接口接受的格式，
 例如 CrossPoint 当前支持的 `cpfont`。上层 App 应读取该字段提供文件选择和过滤，

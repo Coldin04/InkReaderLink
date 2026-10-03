@@ -19,6 +19,29 @@ constraint 渲染功能，不应根据设备类型硬编码界面。
 WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。只支持上传的设备可直接使用
 `DeviceDefinition::upload_only`。
 
+### 支持设备与连接字段
+
+移动端通过 `BooksendSdk.supportedDevices()` 获取 SDK 支持的固件列表。每个
+`SdkSupportedDevice` 包含稳定的 `deviceType`、显示名称 `displayName` 和
+`connectionFields`。设备选择列表和连接表单应使用这个目录，不应在 App 中维护另一份
+固件名称或字段清单。
+
+`SdkConnectionField` 以 `key` 标识保存值，包含显示标签 `label`、是否必填的
+`required` 和输入类型 `kind`：`Text` 渲染文本框，`Address` 渲染地址输入框并允许
+接入原生扫码，带 `options` 的 `Choice` 渲染下拉列表，`Toggle` 渲染开关。新增固件时，
+在 `DeviceDefinition` 中声明显示名称和连接字段；只有 SDK 路由及 adapter 支持后，
+才能把固件加入该目录。
+
+连接表单值通过 `SdkConnectionParameter` 提交：文本和地址使用相应的 `SdkConnectionValue`
+变体，下拉值使用从零开始的选项索引，开关使用布尔值。SDK 根据所选设备定义检查字段
+是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
+
+当前 Read Pico 与 CrossPoint 都声明一个必填 `Address` 字段，key 为 `address`。
+保存的连接值应随设备记录持久化；旧版仅保存 `address` 的记录可迁移为同名字段。
+设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
+SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
+仍可用于只需设备地址的调用。SDK 接受裸 IPv4/hostname 或完整 HTTP/HTTPS URL。
+
 ### 设备信息 capability
 
 `device.info` 表示设备支持读取信息页字段。它是可选能力：设备定义可以不声明，
