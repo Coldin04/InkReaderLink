@@ -1,6 +1,6 @@
 //! Device-independent editable setting model and validation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
@@ -15,6 +15,10 @@ const MAX_TEXT_BYTES: usize = 1024;
 
 /// Parses the firmware's dynamic setting descriptors, rejecting malformed metadata.
 ///
+/// Identical descriptors with the same key are coalesced so clients can tolerate
+/// firmware that exposes one setting in multiple display categories. Conflicting
+/// duplicate keys remain malformed because their update semantics are ambiguous.
+///
 /// # Errors
 /// Returns `RemoteFailure` if any setting cannot be safely represented.
 pub fn parse_settings(body: &[u8]) -> Result<SettingsSnapshot, SdkError> {
@@ -23,13 +27,24 @@ pub fn parse_settings(body: &[u8]) -> Result<SettingsSnapshot, SdkError> {
     if items.len() > MAX_SETTINGS {
         return Err(SdkError::RemoteFailure("too many settings".to_owned()));
     }
-    let mut seen = HashSet::new();
-    let mut settings = Vec::with_capacity(items.len());
+    let mut indexes_by_key: HashMap<String, usize> = HashMap::with_capacity(items.len());
+    let mut settings: Vec<SettingDescriptor> = Vec::with_capacity(items.len());
     for item in items {
         let setting = parse_descriptor(&item)?;
-        if !seen.insert(setting.key.clone()) {
-            return Err(malformed("duplicate setting key"));
+        if let Some(index) = indexes_by_key.get(&setting.key) {
+            let existing = &settings[*index];
+            if existing.name == setting.name
+                && existing.kind == setting.kind
+                && existing.value == setting.value
+            {
+                continue;
+            }
+            return Err(malformed(&format!(
+                "conflicting duplicate setting key: {}",
+                setting.key
+            )));
         }
+        indexes_by_key.insert(setting.key.clone(), settings.len());
         settings.push(setting);
     }
     Ok(SettingsSnapshot { settings })
@@ -290,5 +305,36 @@ mod tests {
                 Err(SdkError::InvalidArgument(_))
             ));
         }
+    }
+
+    #[test]
+    fn coalesces_matching_duplicate_keys_from_multiple_categories() {
+        let snapshot = parse_settings(
+            br#"[
+                {"key":"screenInverted","name":"Night mode","category":"Display","type":"toggle","value":0},
+                {"key":"screenInverted","name":"Night mode","category":"Reader","type":"toggle","value":0}
+            ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.settings.len(), 1);
+        assert_eq!(snapshot.settings[0].category, "Display");
+    }
+
+    #[test]
+    fn rejects_conflicting_duplicate_keys() {
+        let error = parse_settings(
+            br#"[
+                {"key":"screenInverted","name":"Night mode","category":"Display","type":"toggle","value":0},
+                {"key":"screenInverted","name":"Night mode","category":"Reader","type":"toggle","value":1}
+            ]"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting duplicate setting key: screenInverted")
+        );
     }
 }
