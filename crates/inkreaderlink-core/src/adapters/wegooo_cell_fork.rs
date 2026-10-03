@@ -41,6 +41,12 @@ impl WegoCellForkAdapter {
         HttpRequest::new(HttpMethod::Get, "/info")
     }
 
+    /// Validates the required fields in a device info response.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::RemoteFailure` when the body is invalid JSON or
+    /// required firmware fields are missing.
     pub fn validate_info(body: &[u8]) -> Result<(), SdkError> {
         let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
             SdkError::RemoteFailure(format!("invalid wegooo-cell-fork device info: {error}"))
@@ -79,6 +85,12 @@ impl WegoCellForkAdapter {
         }
     }
 
+    /// Parses the device info fields exposed by the firmware.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::RemoteFailure` when the body is invalid or required
+    /// firmware fields are missing.
     pub fn parse_info(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         Self::validate_info(body)?;
         let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
@@ -107,6 +119,11 @@ impl WegoCellForkAdapter {
         .collect())
     }
 
+    /// Parses the saved Wi-Fi network reported by the firmware.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::RemoteFailure` when the response is invalid JSON.
     pub fn parse_wifi_info(body: &str) -> Result<Vec<WifiNetwork>, SdkError> {
         let info: ForkWifiInfo = serde_json::from_str(body).map_err(|error| {
             SdkError::RemoteFailure(format!("invalid wegooo-cell-fork Wi-Fi info: {error}"))
@@ -124,6 +141,12 @@ impl WegoCellForkAdapter {
             .collect())
     }
 
+    /// Builds a request to save Wi-Fi credentials on the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::InvalidArgument` if the credentials cannot be
+    /// serialized.
     pub fn wifi_save_request(credential: &WifiCredential) -> Result<HttpRequest, SdkError> {
         let body = serde_json::to_vec(&ForkWifiCredential {
             ssid: &credential.ssid,
@@ -151,6 +174,11 @@ impl WegoCellForkAdapter {
         request
     }
 
+    /// Parses one page from the firmware's file list endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::RemoteFailure` when the response is invalid JSON.
     pub fn parse_file_page(
         location: &FileLocation,
         body: &str,
@@ -248,7 +276,12 @@ impl WegoCellForkAdapter {
         request
     }
 
-    #[must_use]
+    /// Builds a request to delete a remote file or directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::InvalidArgument` if the request body cannot be
+    /// serialized.
     pub fn delete_path_request(path: &str) -> Result<HttpRequest, SdkError> {
         let body = serde_json::to_vec(&FileMutation {
             action: "delete",
@@ -261,7 +294,12 @@ impl WegoCellForkAdapter {
         Ok(request)
     }
 
-    #[must_use]
+    /// Builds a request to delete a wallpaper from the firmware's picture folder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::InvalidArgument` if the request body cannot be
+    /// serialized.
     pub fn delete_wallpaper_request(name: &str) -> Result<HttpRequest, SdkError> {
         Self::delete_path_request(&format!("{WALLPAPER_DIRECTORY}/{name}"))
     }
@@ -274,6 +312,11 @@ impl WegoCellForkAdapter {
         )
     }
 
+    /// Parses a page of supported wallpapers from the firmware's picture folder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SdkError::RemoteFailure` when the response is invalid JSON.
     pub fn parse_wallpaper_page(body: &str) -> Result<AdapterFilePage, SdkError> {
         let mut page = Self::parse_file_page(
             &FileLocation::Directory(WALLPAPER_DIRECTORY.to_owned()),
@@ -357,7 +400,7 @@ mod tests {
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].name, "442260.jpg");
         assert_eq!(page.entries[0].path, "/pictures/442260.jpg");
-        assert_eq!(page.entries[0].size, 237355);
+        assert_eq!(page.entries[0].size, 237_355);
         assert_eq!(page.entries[0].kind, FileKind::Other);
     }
 }

@@ -282,17 +282,15 @@ impl ReqwestTransport {
                         }
                         chunk
                     }))
+                } else if let Some(activity) = activity {
+                    Body::wrap_stream(stream.map(move |chunk| {
+                        if chunk.is_ok() {
+                            activity.record();
+                        }
+                        chunk
+                    }))
                 } else {
-                    if let Some(activity) = activity {
-                        Body::wrap_stream(stream.map(move |chunk| {
-                            if chunk.is_ok() {
-                                activity.record();
-                            }
-                            chunk
-                        }))
-                    } else {
-                        Body::wrap_stream(stream)
-                    }
+                    Body::wrap_stream(stream)
                 };
                 let mut builder = builder
                     .header(reqwest::header::CONTENT_LENGTH, size)

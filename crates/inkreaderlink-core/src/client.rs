@@ -194,7 +194,7 @@ impl DeviceClient {
 
     /// Deletes multiple remote files or empty directories.
     ///
-    /// CrossPoint uses its multi-path endpoint. Read Pico executes its single-item
+    /// `CrossPoint` uses its multi-path endpoint. Read Pico executes its single-item
     /// endpoint serially and stops on the first failure.
     ///
     /// # Errors
@@ -234,7 +234,7 @@ impl DeviceClient {
                     index,
                     paths.len(),
                     path,
-                    error,
+                    &error,
                 ));
             }
         }
@@ -302,7 +302,7 @@ impl DeviceClient {
                     index,
                     files.len(),
                     &file.path,
-                    error,
+                    &error,
                 ));
             }
         }
@@ -380,7 +380,7 @@ impl DeviceClient {
                     index,
                     paths.len(),
                     path,
-                    error,
+                    &error,
                 ));
             }
         }
@@ -662,6 +662,11 @@ impl DeviceClient {
         .await
     }
 
+    /// Validates and streams a font file to the connected device.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, or protocol errors.
     pub async fn upload_font_with_overwrite_and_progress(
         &self,
         family: String,
@@ -718,27 +723,7 @@ impl DeviceClient {
         }
         let _guard = self.mutation.lock().await;
         if self.kind == DeviceKind::ReadPico && !overwrite {
-            // The firmware closes the connection after rejecting a PUT whose
-            // body is still unread. Probe the documented GET endpoint first
-            // so an existing filename becomes a reliable conflict response.
-            let existing = self
-                .transport
-                .execute(ReadPicoAdapter::font_info_request(file_name.clone()))
-                .await?;
-            match existing.status {
-                200 => {
-                    return Err(SdkError::Conflict(format!(
-                        "font already exists: {file_name}"
-                    )));
-                }
-                404 => {}
-                409 => {
-                    return Err(SdkError::Unsupported(
-                        "Read Pico font upload requires a mounted TF card".to_owned(),
-                    ));
-                }
-                _ => ensure_read_pico_success(&existing, "check font before upload")?,
-            }
+            self.ensure_read_pico_font_is_missing(&file_name).await?;
         }
         let request = match self.kind {
             DeviceKind::ReadPico => {
@@ -1219,6 +1204,25 @@ impl DeviceClient {
             )))
         }
     }
+
+    async fn ensure_read_pico_font_is_missing(&self, file_name: &str) -> Result<(), SdkError> {
+        // The firmware closes a rejected PUT before consuming its body. Probe
+        // first so duplicate names produce a reliable conflict response.
+        let existing = self
+            .transport
+            .execute(ReadPicoAdapter::font_info_request(file_name.to_owned()))
+            .await?;
+        match existing.status {
+            200 => Err(SdkError::Conflict(format!(
+                "font already exists: {file_name}"
+            ))),
+            404 => Ok(()),
+            409 => Err(SdkError::Unsupported(
+                "Read Pico font upload requires a mounted TF card".to_owned(),
+            )),
+            _ => ensure_read_pico_success(&existing, "check font before upload"),
+        }
+    }
 }
 
 fn ensure_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
@@ -1331,7 +1335,7 @@ fn batch_operation_error(
     completed: usize,
     total: usize,
     path: &str,
-    error: SdkError,
+    error: &SdkError,
 ) -> SdkError {
     SdkError::RemoteFailure(format!(
         "batch {operation} stopped after {completed}/{total} files; failed at {path}: {error}. Earlier completed files were not rolled back."

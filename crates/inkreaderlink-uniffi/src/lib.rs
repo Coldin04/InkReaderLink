@@ -688,7 +688,8 @@ fn resolve_connection_address(
                 detail: format!("unknown connection field: {}", parameter.key),
             })?;
         let valid = match (&field.kind, &parameter.value) {
-            (DeviceConnectionFieldKind::Text, SdkConnectionValue::Text { .. }) => true,
+            (DeviceConnectionFieldKind::Text, SdkConnectionValue::Text { .. })
+            | (DeviceConnectionFieldKind::Toggle, SdkConnectionValue::Toggle { .. }) => true,
             (DeviceConnectionFieldKind::Address, SdkConnectionValue::Address { value }) => {
                 address = Some(value.clone());
                 true
@@ -697,7 +698,6 @@ fn resolve_connection_address(
                 DeviceConnectionFieldKind::Choice { options },
                 SdkConnectionValue::Choice { index },
             ) => usize::try_from(*index).is_ok_and(|index| index < options.len()),
-            (DeviceConnectionFieldKind::Toggle, SdkConnectionValue::Toggle { .. }) => true,
             _ => false,
         };
         if !valid {
@@ -879,6 +879,10 @@ impl SdkDeviceClient {
 
     /// Deletes multiple remote paths. Supported-device endpoint differences are
     /// handled by the SDK; sequential execution stops at the first failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, transport, or protocol errors.
     pub async fn delete_files(&self, paths: Vec<String>) -> Result<(), SdkOperationError> {
         let inner = Arc::clone(&self.inner);
         run_on_sdk_runtime(async move { inner.delete_files(paths).await }).await
@@ -954,6 +958,10 @@ impl SdkDeviceClient {
 
     /// Downloads multiple remote files to the supplied local destinations.
     /// Downloads are streamed one at a time and stop at the first failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, file, capability, transport, or protocol errors.
     pub async fn download_files(
         &self,
         files: Vec<SdkFileDownload>,
@@ -1002,6 +1010,10 @@ impl SdkDeviceClient {
     }
 
     /// Moves multiple remote files into one existing directory, serially.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, transport, or protocol errors.
     pub async fn move_files(
         &self,
         paths: Vec<String>,
