@@ -1,5 +1,6 @@
 use crate::{
-    Capability, DeviceConstraints, DeviceDefinition, DeviceFileFormats, built_in_definition,
+    Capability, DeviceConstraints, DeviceDefinition, DeviceFileFormats, DeviceResolution,
+    built_in_definition,
 };
 
 pub const READ_PICO_DEVICE_TYPE: &str = "read-pico";
@@ -27,6 +28,7 @@ pub struct DeviceProfile {
     pub capabilities: Vec<Capability>,
     pub constraints: DeviceConstraints,
     pub file_formats: DeviceFileFormats,
+    pub display_resolution: Option<DeviceResolution>,
 }
 
 #[must_use]
@@ -58,6 +60,7 @@ impl DeviceProfile {
             capabilities: definition.capabilities,
             constraints: definition.constraints,
             file_formats: definition.file_formats,
+            display_resolution: definition.display_resolution,
         }
     }
 }

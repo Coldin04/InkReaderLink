@@ -8,11 +8,11 @@ use std::{
 
 use inkreaderlink_core::{
     Capability, ConflictPolicy, DeviceClient, DeviceConnectionField, DeviceConnectionFieldKind,
-    DeviceConstraints, DeviceFileFormats, DeviceInfoField, DeviceKind, DeviceProfile, FileDownload,
-    FileEntry, FileKind, FileLocation, FontCatalog, FontFamily, FontFile, OpdsCredential,
-    OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind, SettingValue,
-    SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult, WallpaperUploadResult,
-    WifiCredential, WifiNetwork, built_in_definitions,
+    DeviceConstraints, DeviceFileFormats, DeviceInfoField, DeviceKind, DeviceProfile,
+    DeviceResolution, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog, FontFamily,
+    FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind,
+    SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
+    WallpaperUploadResult, WifiCredential, WifiNetwork, built_in_definitions,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -456,6 +456,22 @@ pub struct SdkDeviceProfile {
     pub capabilities: Vec<String>,
     pub constraints: SdkDeviceConstraints,
     pub file_formats: SdkDeviceFileFormats,
+    pub display_resolution: Option<SdkDeviceResolution>,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct SdkDeviceResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl From<DeviceResolution> for SdkDeviceResolution {
+    fn from(resolution: DeviceResolution) -> Self {
+        Self {
+            width: resolution.width,
+            height: resolution.height,
+        }
+    }
 }
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -600,6 +616,7 @@ impl From<DeviceProfile> for SdkDeviceProfile {
                 .collect(),
             constraints: profile.constraints.into(),
             file_formats: profile.file_formats.into(),
+            display_resolution: profile.display_resolution.map(Into::into),
         }
     }
 }

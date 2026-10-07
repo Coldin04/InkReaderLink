@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     SdkError, SettingChange, SettingDescriptor, SettingKind, SettingValue, SettingsSnapshot,
+    SettingsValidationPolicy,
 };
 
 const MAX_SETTINGS: usize = 256;
@@ -13,15 +14,17 @@ const MAX_OPTIONS: usize = 256;
 const MAX_LABEL_BYTES: usize = 256;
 const MAX_TEXT_BYTES: usize = 1024;
 
-/// Parses the firmware's dynamic setting descriptors, rejecting malformed metadata.
+/// Parses the firmware's dynamic setting descriptors according to the selected policy.
 ///
-/// Identical descriptors with the same key are coalesced so clients can tolerate
-/// firmware that exposes one setting in multiple display categories. Conflicting
-/// duplicate keys remain malformed because their update semantics are ambiguous.
+/// Permissive mode skips malformed descriptors and retains the first descriptor for
+/// each key. Strict mode rejects malformed descriptors and any duplicate key.
 ///
 /// # Errors
 /// Returns `RemoteFailure` if any setting cannot be safely represented.
-pub fn parse_settings(body: &[u8]) -> Result<SettingsSnapshot, SdkError> {
+pub fn parse_settings(
+    body: &[u8],
+    policy: SettingsValidationPolicy,
+) -> Result<SettingsSnapshot, SdkError> {
     let items: Vec<Value> = serde_json::from_slice(body)
         .map_err(|error| SdkError::RemoteFailure(format!("invalid settings list: {error}")))?;
     if items.len() > MAX_SETTINGS {
@@ -30,19 +33,19 @@ pub fn parse_settings(body: &[u8]) -> Result<SettingsSnapshot, SdkError> {
     let mut indexes_by_key: HashMap<String, usize> = HashMap::with_capacity(items.len());
     let mut settings: Vec<SettingDescriptor> = Vec::with_capacity(items.len());
     for item in items {
-        let setting = parse_descriptor(&item)?;
-        if let Some(index) = indexes_by_key.get(&setting.key) {
-            let existing = &settings[*index];
-            if existing.name == setting.name
-                && existing.kind == setting.kind
-                && existing.value == setting.value
-            {
-                continue;
+        let setting = match parse_descriptor(&item) {
+            Ok(setting) => setting,
+            Err(_) if policy == SettingsValidationPolicy::Permissive => continue,
+            Err(error) => return Err(error),
+        };
+        if indexes_by_key.contains_key(&setting.key) {
+            if policy == SettingsValidationPolicy::Strict {
+                return Err(malformed(&format!(
+                    "duplicate setting key: {}",
+                    setting.key
+                )));
             }
-            return Err(malformed(&format!(
-                "conflicting duplicate setting key: {}",
-                setting.key
-            )));
+            continue;
         }
         indexes_by_key.insert(setting.key.clone(), settings.len());
         settings.push(setting);
@@ -251,7 +254,8 @@ mod tests {
 
     #[test]
     fn parses_all_types_and_encodes_only_changed_keys() {
-        let snapshot = parse_settings(RESPONSE.as_bytes()).unwrap();
+        let snapshot =
+            parse_settings(RESPONSE.as_bytes(), SettingsValidationPolicy::Strict).unwrap();
         assert_eq!(snapshot.settings.len(), 4);
         assert_eq!(snapshot.settings[1].value, SettingValue::Choice(1));
         let body = encode_changes(
@@ -276,12 +280,14 @@ mod tests {
     fn rejects_untrusted_descriptors_and_invalid_changes() {
         assert!(
             parse_settings(
-                br#"[{"key":"../bad","name":"bad","category":"x","type":"toggle","value":1}]"#
+                br#"[{"key":"../bad","name":"bad","category":"x","type":"toggle","value":1}]"#,
+                SettingsValidationPolicy::Strict,
             )
             .is_err()
         );
-        assert!(parse_settings(br#"[{"key":"a","name":"bad","category":"x","type":"enum","value":2,"options":["x"]}]"#).is_err());
-        let snapshot = parse_settings(RESPONSE.as_bytes()).unwrap();
+        assert!(parse_settings(br#"[{"key":"a","name":"bad","category":"x","type":"enum","value":2,"options":["x"]}]"#, SettingsValidationPolicy::Strict).is_err());
+        let snapshot =
+            parse_settings(RESPONSE.as_bytes(), SettingsValidationPolicy::Strict).unwrap();
         for change in [
             SettingChange {
                 key: "unknown".to_owned(),
@@ -308,17 +314,21 @@ mod tests {
     }
 
     #[test]
-    fn coalesces_matching_duplicate_keys_from_multiple_categories() {
-        let snapshot = parse_settings(
+    fn strict_mode_rejects_matching_duplicate_keys_from_multiple_categories() {
+        let error = parse_settings(
             br#"[
                 {"key":"screenInverted","name":"Night mode","category":"Display","type":"toggle","value":0},
                 {"key":"screenInverted","name":"Night mode","category":"Reader","type":"toggle","value":0}
             ]"#,
+            SettingsValidationPolicy::Strict,
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(snapshot.settings.len(), 1);
-        assert_eq!(snapshot.settings[0].category, "Display");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate setting key: screenInverted")
+        );
     }
 
     #[test]
@@ -328,13 +338,14 @@ mod tests {
                 {"key":"screenInverted","name":"Night mode","category":"Display","type":"toggle","value":0},
                 {"key":"screenInverted","name":"Night mode","category":"Reader","type":"toggle","value":1}
             ]"#,
+            SettingsValidationPolicy::Strict,
         )
         .unwrap_err();
 
         assert!(
             error
                 .to_string()
-                .contains("conflicting duplicate setting key: screenInverted")
+                .contains("duplicate setting key: screenInverted")
         );
     }
 }

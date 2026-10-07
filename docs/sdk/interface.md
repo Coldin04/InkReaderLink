@@ -19,6 +19,11 @@ constraint 渲染功能，不应根据设备类型硬编码界面。
 WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。只支持上传的设备可直接使用
 `DeviceDefinition::upload_only`。
 
+设备恒定信息也由 `DeviceDefinition` 维护，并随连接后的 `SdkDeviceProfile` 返回。
+`displayResolution` 是可选的像素尺寸记录，包含 `width` 和 `height`；它表示 SDK 已知的
+设备显示面板分辨率，不依赖设备在线信息接口。未知时为 `null`，App 不应自行推断。
+当前 Read Pico 与 kiiko 厂长 Fork 声明为 684 × 1216（宽 × 高）；CrossPoint 暂无此字段。
+
 ### 支持设备与连接字段
 
 移动端通过 `BooksendSdk.supportedDevices()` 获取 SDK 支持的固件列表。每个
@@ -231,11 +236,13 @@ Android/iOS 应根据 `DeviceProfile.capabilities` 显示入口，再按 `kind` 
 成功返回设备重新读取的新快照，页面应据此刷新控件。
 
 SDK 在提交前重新读取设置并核对原始快照。若当前值、选项或约束已改变，返回
-`Conflict`，App 应提示刷新后再编辑。设置 key 应唯一；作为对将同一设置放入多个
-显示分类的固件兼容，若重复项的 key、名称、控件类型和当前值完全一致，SDK 保留首项
-并忽略后项。其他重复 key 仍被拒绝。SDK 也拒绝未知 key、类型不符、
-枚举索引越界、数值越界或不符合步长、过长文本，并限制设置响应大小及描述符
-数量。固件返回的设置元数据按不可信数据处理；UI 不应将其作为 HTML 执行。
+`Conflict`，App 应提示刷新后再编辑。读取设置默认使用宽容策略：无法表示的单个设置项
+会被跳过，重复 key 保留首次出现的设置项。需要诊断或严格兼容性检查的 core 调用方，
+可在创建 `DeviceClient` 时显式选择 `SettingsValidationPolicy::Strict`；该模式会拒绝
+无效设置项以及任何重复 key。无论策略如何，
+损坏的 JSON、超出设置数量上限的响应仍会报错。提交时 SDK 始终拒绝未知 key、类型不符、
+枚举索引越界、数值越界或不符合步长、过长文本。固件返回的设置元数据按不可信数据处理；
+UI 不应将其作为 HTML 执行。
 若 POST 成功但重新读取失败，返回 `CommittedWithWarning`，App 应提示设置可能
 已保存并允许刷新。Read Pico 未声明设置能力，调用返回 `Unsupported`。
 

@@ -2,7 +2,7 @@
 
 use crate::{
     Capability, DeviceConnectionField, DeviceConnectionFieldKind, DeviceConstraints,
-    DeviceFileFormats, DeviceKind, capability::ids,
+    DeviceFileFormats, DeviceKind, DeviceResolution, capability::ids,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -13,6 +13,7 @@ pub struct DeviceDefinition {
     pub capabilities: Vec<Capability>,
     pub constraints: DeviceConstraints,
     pub file_formats: DeviceFileFormats,
+    pub display_resolution: Option<DeviceResolution>,
 }
 
 impl DeviceDefinition {
@@ -28,12 +29,19 @@ impl DeviceDefinition {
                 can_choose_upload_directory: false,
             },
             file_formats,
+            display_resolution: None,
         }
     }
 
     #[must_use]
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.display_name = display_name.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_display_resolution(mut self, width: u32, height: u32) -> Self {
+        self.display_resolution = Some(DeviceResolution { width, height });
         self
     }
 
@@ -94,6 +102,7 @@ pub fn read_pico_definition() -> DeviceDefinition {
         },
     )
     .with_display_name("Read Pico")
+    .with_display_resolution(684, 1216)
     .with_connection_field(DeviceConnectionField {
         key: "address".to_owned(),
         label: "设备地址".to_owned(),
@@ -171,6 +180,7 @@ pub fn wegooo_cell_fork_definition() -> DeviceDefinition {
         },
     )
     .with_display_name("kiiko 厂长 Fork固件")
+    .with_display_resolution(684, 1216)
     .with_connection_field(DeviceConnectionField {
         key: "address".to_owned(),
         label: "设备地址".to_owned(),

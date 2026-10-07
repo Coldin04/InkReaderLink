@@ -60,6 +60,13 @@ pub struct DeviceConstraints {
     pub can_choose_upload_directory: bool,
 }
 
+/// Fixed physical display dimensions reported by the SDK's device catalog.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceFileFormats {
     pub accepts_any_upload_format: bool,
@@ -74,6 +81,16 @@ pub enum ConflictPolicy {
     Fail,
     OverwriteWhenSupported,
     ReplaceWithBackup,
+}
+
+/// Controls how CrossPoint settings metadata is validated when read from firmware.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SettingsValidationPolicy {
+    /// Skip malformed descriptors and keep the first descriptor for each key.
+    #[default]
+    Permissive,
+    /// Reject malformed descriptors and conflicting duplicate keys.
+    Strict,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

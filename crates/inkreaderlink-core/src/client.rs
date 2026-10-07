@@ -16,7 +16,7 @@ use crate::{
         wegooo_cell_fork::WegoCellForkAdapter,
     },
     capability::ids,
-    model::ConflictPolicy,
+    model::{ConflictPolicy, SettingsValidationPolicy},
     settings::{encode_changes, parse_settings},
     transport::{HttpResponse, ReqwestTransport, SharedTransport, WebSocketUpload},
 };
@@ -27,6 +27,7 @@ pub struct DeviceClient {
     profile: DeviceProfile,
     transport: SharedTransport,
     mutation: Mutex<()>,
+    settings_validation_policy: SettingsValidationPolicy,
 }
 
 impl DeviceClient {
@@ -47,7 +48,15 @@ impl DeviceClient {
             profile: DeviceProfile::baseline(kind),
             transport,
             mutation: Mutex::new(()),
+            settings_validation_policy: SettingsValidationPolicy::Permissive,
         }
+    }
+
+    /// Selects validation strictness for CrossPoint dynamic settings.
+    #[must_use]
+    pub fn with_settings_validation_policy(mut self, policy: SettingsValidationPolicy) -> Self {
+        self.settings_validation_policy = policy;
+        self
     }
 
     #[must_use]
@@ -862,7 +871,7 @@ impl DeviceClient {
             .execute(CrossPointAdapter::settings_list_request())
             .await?;
         ensure_success(&response, "list settings")?;
-        parse_settings(&response.body)
+        parse_settings(&response.body, self.settings_validation_policy)
     }
 
     async fn list_read_pico(&self, location: FileLocation) -> Result<Vec<FileEntry>, SdkError> {
