@@ -52,7 +52,7 @@ impl DeviceClient {
         }
     }
 
-    /// Selects validation strictness for CrossPoint dynamic settings.
+    /// Selects validation strictness for `CrossPoint` dynamic settings.
     #[must_use]
     pub fn with_settings_validation_policy(mut self, policy: SettingsValidationPolicy) -> Self {
         self.settings_validation_policy = policy;

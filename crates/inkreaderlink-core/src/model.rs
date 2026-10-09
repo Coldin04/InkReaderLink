@@ -83,7 +83,7 @@ pub enum ConflictPolicy {
     ReplaceWithBackup,
 }
 
-/// Controls how CrossPoint settings metadata is validated when read from firmware.
+/// Controls how `CrossPoint` settings metadata is validated when read from firmware.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SettingsValidationPolicy {
     /// Skip malformed descriptors and keep the first descriptor for each key.
