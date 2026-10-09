@@ -41,7 +41,7 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 变体，下拉值使用从零开始的选项索引，开关使用布尔值。SDK 根据所选设备定义检查字段
 是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
 
-当前 Read Pico、CrossPoint 与 kiiko 厂长 Fork 固件都声明一个必填 `Address` 字段，key 为 `address`。
+当前 Read Pico、CrossPoint、WhiteOS 与 kiiko 厂长 Fork 固件都声明一个必填 `Address` 字段，key 为 `address`。
 保存的连接值应随设备记录持久化；旧版仅保存 `address` 的记录可迁移为同名字段。
 设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
 SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
@@ -101,10 +101,10 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint | kiiko 厂长 Fork 固件 |
-|---|---:|---:|---:|
-| `can_list_directories` | false | true | true |
-| `can_choose_upload_directory` | false | true | false |
+| 字段 | Read Pico | CrossPoint | WhiteOS | kiiko 厂长 Fork 固件 |
+|---|---:|---:|---:|---:|
+| `can_list_directories` | false | true | true | true |
+| `can_choose_upload_directory` | false | true | true | false |
 
 固件格式声明：
 
@@ -112,6 +112,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 |---|---|---|---|---|
 | Read Pico | EPUB、TXT | `.ttf` | — | EPUB、TXT |
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
+| WhiteOS | API 接受任意扩展名 | — | — | 未知 |
 | kiiko 厂长 Fork 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
@@ -157,6 +158,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 
 - `ReadPicoAdapter`：仅接受 `Root`。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
+- `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
 - `WegoCellForkAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
 
 ## 可调用 API
@@ -168,10 +170,10 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 `listSettings`、`applySettings`、`listWallpapers`、`uploadWallpaper` 和
 `deleteWallpaper`。
 
-实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型请求
-设备信息接口，Read Pico 与 kiiko 厂长 Fork 固件验证 `/info`，CrossPoint 验证 `/api/status`；只有 HTTP
-请求成功且响应包含对应设备的信息字段时才返回 client。同步 `connect` 只创建
-client，不代表设备已连接。
+实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型验证设备：
+Read Pico 与 kiiko 厂长 Fork 固件检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
+读取根目录 `/api/list?path=/`。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
+同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
 
 每个调用先检查 profile 中的 capability，未声明时返回 `Unsupported`。文件上传
 和下载使用流式 I/O；修改操作在单个设备 client 内串行执行。
@@ -260,5 +262,22 @@ IPv4 URL，CrossPoint AP 网页码可能提供 `crosspoint.local`。
 
 - Read Pico 的分页由 SDK 内部处理，上层不感知固件分页参数。
 - CrossPoint 的目录列表由 SDK 转换为相同的 `FileEntry` 列表。
+- WhiteOS 的完整目录列表由 SDK 转换为相同的 `FileEntry` 列表。
 - kiiko 厂长 Fork 固件的普通文件列表及壁纸列表分页由 SDK 内部处理。
 - App 不应拼接固件 endpoint；位置、分页和协议参数由 SDK 处理。
+
+### WhiteOS 文件 API
+
+WhiteOS 使用 `GET /api/list?path=...` 返回 `{ path, entries }`，每个条目包含
+`name`、`dir` 和 `size`。该接口不分页；SDK 将 `dir` 映射为统一的目录类型，并根据
+返回路径构造绝对文件路径。
+
+文件操作使用 `PUT /api/upload?path=...`、`GET /api/download?path=...`、
+`POST /api/delete?path=...`、`POST /api/rename?from=...&to=...` 和
+`POST /api/mkdir?path=...`。写操作带 `X-Pico-Request: 1` 请求头；上传使用流式
+请求体。成功响应中的 `{ "ok": true }` 被接受，`ok: false` 返回的错误会传递给调用方。
+设备 API 会递归删除目录内容，这一行为由适配器封装，不单独暴露为 capability。
+
+WhiteOS 声明目录列表、选择上传目录、删除、下载、重命名和创建目录能力；没有移动、
+覆盖上传、Wi-Fi、字体或设备信息接口。上传 API 未限制扩展名，设备原生可读格式尚未
+确认，因此 SDK 允许任意扩展名上传，并将可读格式留空。

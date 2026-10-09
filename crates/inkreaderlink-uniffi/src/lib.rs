@@ -760,6 +760,7 @@ impl SdkDeviceClient {
         let kind = match device_type.as_str() {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
+            "whiteos" => DeviceKind::WhiteOs,
             "wegooo-cell-fork" => DeviceKind::WegoCellFork,
             _ => {
                 return Err(SdkOperationError::Unsupported {
@@ -1274,6 +1275,7 @@ impl BooksendSdk {
         let kind = match device_type.as_str() {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
+            "whiteos" => DeviceKind::WhiteOs,
             "wegooo-cell-fork" => DeviceKind::WegoCellFork,
             _ => return None,
         };
