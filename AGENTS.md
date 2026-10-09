@@ -33,6 +33,7 @@
 - 版本以 Git tag 管理。
 - commit 必须签名。
 - 未经用户明确同意，不得创建 commit；创建 commit 前必须先征得同意。
+- 合并到 `master` 前，应对照 `.github/workflows/checks.yml` 检查改动涉及的静态检查要求，并修复已知会失败的项。Rust 改动重点检查 `cargo fmt --all -- --check` 和 Clippy `-D warnings`；无需等待 PR CI 的全部 job 完成或通过。若用户要求不运行编译或测试，可根据已有 CI 诊断与代码审查核对静态检查，但不得声称执行过未运行的检查。
 
 ## CI 发布
 

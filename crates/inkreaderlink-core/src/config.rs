@@ -282,7 +282,10 @@ mod tests {
             assert!(capability_ids.contains(&required));
         }
         assert!(definition.file_formats.accepts_any_upload_format);
-        assert!(definition.file_formats.upload_extensions.is_empty());
+        assert_eq!(
+            definition.file_formats.upload_extensions,
+            Vec::<String>::new()
+        );
         assert_eq!(
             definition.file_formats.readable_extensions,
             vec!["txt".to_owned(), "epub".to_owned(), "pdf".to_owned()]
