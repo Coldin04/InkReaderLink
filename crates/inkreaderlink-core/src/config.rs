@@ -178,7 +178,7 @@ pub fn whiteos_definition() -> DeviceDefinition {
             upload_extensions: Vec::new(),
             font_upload_extensions: Vec::new(),
             wallpaper_upload_extensions: Vec::new(),
-            readable_extensions: Vec::new(),
+            readable_extensions: extensions(&["txt", "epub", "pdf"]),
         },
     )
     .with_display_name("whiteos")
@@ -282,6 +282,10 @@ mod tests {
             assert!(capability_ids.contains(&required));
         }
         assert!(definition.file_formats.accepts_any_upload_format);
-        assert!(definition.file_formats.readable_extensions.is_empty());
+        assert!(definition.file_formats.upload_extensions.is_empty());
+        assert_eq!(
+            definition.file_formats.readable_extensions,
+            vec!["txt".to_owned(), "epub".to_owned(), "pdf".to_owned()]
+        );
     }
 }
