@@ -237,7 +237,16 @@ impl ReqwestTransport {
             .base_url
             .join(request.path.trim_start_matches('/'))
             .map_err(|error| SdkError::InvalidArgument(format!("invalid endpoint: {error}")))?;
-        url.query_pairs_mut().extend_pairs(request.query.iter());
+        {
+            url.query_pairs_mut().extend_pairs(request.query.iter());
+        }
+        // The device's browser uploader uses encodeURIComponent, which emits
+        // `%20` for spaces. Keep the same query representation instead of the
+        // `+` emitted by form-style query serialization.
+        if let Some(query) = url.query().map(str::to_owned) {
+            let query = query.replace('+', "%20");
+            url.set_query(Some(&query));
+        }
         Ok(url)
     }
 
@@ -574,6 +583,7 @@ pub type SharedTransport = Arc<dyn Transport>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::whiteos::WhiteOsAdapter;
 
     #[test]
     fn accepts_qr_ip_hostname_and_full_url_inputs() {
@@ -586,6 +596,24 @@ mod tests {
     fn rejects_non_http_schemes() {
         let error = ReqwestTransport::new("ftp://192.168.4.1", Duration::from_secs(5));
         assert!(matches!(error, Err(SdkError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn whiteos_upload_uses_put_and_encodes_the_full_path_as_a_query_value() {
+        let transport = ReqwestTransport::new("192.168.8.156", Duration::from_secs(5)).unwrap();
+        let remote_path = "/《创业在路上》电子书下载 罗永浩.epub";
+        let request =
+            WhiteOsAdapter::upload_request(PathBuf::from("/tmp/book.epub"), remote_path, None);
+
+        assert_eq!(request.method, HttpMethod::Put);
+        assert_eq!(request.path, "/api/upload");
+        let url = transport.request_url(&request).unwrap();
+        assert_eq!(url.path(), "/api/upload");
+        assert!(url.as_str().contains("%20"));
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "path").unwrap().1,
+            remote_path
+        );
     }
 
     #[test]

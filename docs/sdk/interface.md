@@ -112,7 +112,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 |---|---|---|---|---|
 | Read Pico | EPUB、TXT | `.ttf` | — | EPUB、TXT |
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
-| WhiteOS | API 接受任意扩展名 | — | — | 未知 |
+| WhiteOS | API 接受任意扩展名 | — | — | TXT、EPUB、PDF |
 | kiiko 厂长 Fork 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
