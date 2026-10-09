@@ -103,6 +103,7 @@ pub struct HttpRequest {
     pub method: HttpMethod,
     pub path: String,
     pub query: Vec<(String, String)>,
+    pub headers: Vec<(String, String)>,
     pub body: HttpBody,
     pub response_limit: Option<usize>,
 }
@@ -114,6 +115,7 @@ impl HttpRequest {
             method,
             path: path.into(),
             query: Vec::new(),
+            headers: Vec::new(),
             body: HttpBody::Empty,
             response_limit: None,
         }
@@ -258,7 +260,10 @@ impl ReqwestTransport {
         } else {
             &self.client
         };
-        let builder = client.request(method, url);
+        let mut builder = client.request(method, url);
+        for (name, value) in &request.headers {
+            builder = builder.header(name.as_str(), value.as_str());
+        }
         match request.body {
             HttpBody::Empty => Ok(builder),
             HttpBody::Json(body) => Ok(builder

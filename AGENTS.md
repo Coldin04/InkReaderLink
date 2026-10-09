@@ -24,6 +24,7 @@
 
 - `CrossPointAdapter`：CrossPoint HTTP、WebSocket 和文件管理。
 - `ReadPicoAdapter`：Read Pico HTTP、图书管理和部分成功语义。
+- `WhiteOsAdapter`：WhiteOS `/api` 文件列表、上传、下载和文件管理接口。
 - CrossPoint 文件替换可采用：旧文件改名为 `<name>.back`，上传新文件并核对成功后删除 `.back`；失败时尝试恢复，恢复失败必须返回明确错误。
 
 ## Git 与版本

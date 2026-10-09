@@ -5,6 +5,7 @@ use crate::{
 
 pub const READ_PICO_DEVICE_TYPE: &str = "read-pico";
 pub const CROSSPOINT_DEVICE_TYPE: &str = "crosspoint";
+pub const WHITEOS_DEVICE_TYPE: &str = "whiteos";
 pub const WEGOOO_CELL_FORK_DEVICE_TYPE: &str = "wegooo-cell-fork";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,6 +20,7 @@ pub struct DeviceIdentity {
 pub enum DeviceKind {
     ReadPico,
     CrossPoint,
+    WhiteOs,
     WegoCellFork,
 }
 
@@ -36,6 +38,7 @@ pub fn route_device(device_type: &str) -> Option<DeviceKind> {
     match device_type {
         READ_PICO_DEVICE_TYPE => Some(DeviceKind::ReadPico),
         CROSSPOINT_DEVICE_TYPE => Some(DeviceKind::CrossPoint),
+        WHITEOS_DEVICE_TYPE => Some(DeviceKind::WhiteOs),
         WEGOOO_CELL_FORK_DEVICE_TYPE => Some(DeviceKind::WegoCellFork),
         _ => None,
     }
