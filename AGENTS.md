@@ -33,6 +33,7 @@
 - 版本以 Git tag 管理。
 - commit 必须签名。
 - 未经用户明确同意，不得创建 commit；创建 commit 前必须先征得同意。
+- 合并到 `master` 前，必须确保该 PR 的 `.github/workflows/checks.yml` 对应检查全部通过；不得在检查仍运行、失败或未执行时合并。涉及 Rust 代码时，至少要通过格式检查 `cargo fmt --all -- --check`、工作区测试 `cargo test --workspace --locked` 和 Clippy `cargo clippy --workspace --all-targets --locked -- -D warnings`。其他改动还需通过工作流中与改动相关的检查；PR CI 的所有 job 均须成功后方可合并。
 
 ## CI 发布
 

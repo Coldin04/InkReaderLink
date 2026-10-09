@@ -1,4 +1,4 @@
-//! WhiteOS HTTP file-management API adapter.
+//! `WhiteOS` HTTP file-management API adapter.
 
 use std::path::{Path, PathBuf};
 
@@ -43,7 +43,7 @@ impl WhiteOsAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if the response is not a WhiteOS file-list document.
+    /// Returns an error if the response is not a `WhiteOS` file-list document.
     pub fn validate_file_list(body: &[u8]) -> Result<(), crate::SdkError> {
         let body = std::str::from_utf8(body).map_err(|error| {
             crate::SdkError::RemoteFailure(format!("invalid WhiteOS file list: {error}"))
@@ -51,9 +51,9 @@ impl WhiteOsAdapter {
         Self::parse_file_list(body).map(|_| ())
     }
 
-    /// Converts a WhiteOS listing into the common file-page model.
+    /// Converts a `WhiteOS` listing into the common file-page model.
     ///
-    /// WhiteOS returns the complete directory in one response, without page
+    /// `WhiteOS` returns the complete directory in one response, without page
     /// metadata.
     ///
     /// # Errors
