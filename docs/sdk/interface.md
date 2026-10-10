@@ -22,7 +22,7 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 设备恒定信息也由 `DeviceDefinition` 维护，并随连接后的 `SdkDeviceProfile` 返回。
 `displayResolution` 是可选的像素尺寸记录，包含 `width` 和 `height`；它表示 SDK 已知的
 设备显示面板分辨率，不依赖设备在线信息接口。未知时为 `null`，App 不应自行推断。
-当前 Read Pico 与 kiiko 厂长 Fork 声明为 684 × 1216（宽 × 高）；CrossPoint 暂无此字段。
+当前 Read Pico 与 KiikoRead 声明为 684 × 1216（宽 × 高）；CrossPoint 暂无此字段。
 
 ### 支持设备与连接字段
 
@@ -41,7 +41,7 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 变体，下拉值使用从零开始的选项索引，开关使用布尔值。SDK 根据所选设备定义检查字段
 是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
 
-当前 Read Pico、CrossPoint、WhiteOS 与 kiiko 厂长 Fork 固件都声明一个必填 `Address` 字段，key 为 `address`。
+当前 Read Pico、CrossPoint、WhiteOS 与 KiikoRead 固件都声明一个必填 `Address` 字段，key 为 `address`。
 保存的连接值应随设备记录持久化；旧版仅保存 `address` 的记录可迁移为同名字段。
 设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
 SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
@@ -101,7 +101,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint | WhiteOS | kiiko 厂长 Fork 固件 |
+| 字段 | Read Pico | CrossPoint | WhiteOS | KiikoRead 固件 |
 |---|---:|---:|---:|---:|
 | `can_list_directories` | false | true | true | true |
 | `can_choose_upload_directory` | false | true | true | false |
@@ -113,7 +113,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | Read Pico | EPUB、TXT | `.ttf` | — | EPUB、TXT |
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
 | WhiteOS | API 接受任意扩展名 | — | — | TXT、EPUB、PDF |
-| kiiko 厂长 Fork 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
+| KiikoRead 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
 `upload_extensions` 过滤。`readable_extensions` 表示设备原生阅读格式。
@@ -134,7 +134,7 @@ CrossPoint 当前返回 `cpfont`，因为固件字体上传接口只接受 `.cpf
 可选同时设为锁屏壁纸，并返回 `SdkWallpaperUploadResult`。单张上传上限为 20 MiB，
 应用为锁屏壁纸时上限为 2 MiB。若固件已保存图片但设置锁屏壁纸失败，SDK 返回
 `CommittedWithWarning`，表示文件已上传、应用步骤失败。`deleteWallpaper(fileName)`
-按壁纸文件名删除。上述能力仅由 kiiko 厂长 Fork 固件声明。
+按壁纸文件名删除。上述能力仅由 KiikoRead 固件声明。
 仅当设备声明 `fonts.upload.family` 时，App 才要求用户输入字体族名称；Read Pico
 直接按文件名上传，不需要此字段。
 
@@ -159,7 +159,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 - `ReadPicoAdapter`：仅接受 `Root`。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
 - `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
-- `WegoCellForkAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
+- `KiikoReadAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
 
 ## 可调用 API
 
@@ -171,7 +171,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 `deleteWallpaper`。
 
 实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型验证设备：
-Read Pico 与 kiiko 厂长 Fork 固件检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
+Read Pico 与 KiikoRead 固件检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
 读取根目录 `/api/list?path=/`。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
 同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
 
@@ -263,7 +263,7 @@ IPv4 URL，CrossPoint AP 网页码可能提供 `crosspoint.local`。
 - Read Pico 的分页由 SDK 内部处理，上层不感知固件分页参数。
 - CrossPoint 的目录列表由 SDK 转换为相同的 `FileEntry` 列表。
 - WhiteOS 的完整目录列表由 SDK 转换为相同的 `FileEntry` 列表。
-- kiiko 厂长 Fork 固件的普通文件列表及壁纸列表分页由 SDK 内部处理。
+- KiikoRead 固件的普通文件列表及壁纸列表分页由 SDK 内部处理。
 - App 不应拼接固件 endpoint；位置、分页和协议参数由 SDK 处理。
 
 ### WhiteOS 文件 API

@@ -12,12 +12,12 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 - [Read Pico 官方固件](https://github.com/MindReset/read_pico_firmware)
 - [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) （在 [CrossMux](https://github.com/0x1abin/crossmux) 上测试通过)
-- [kiiko 厂长 Fork 固件](https://github.com/wegooo-cell/read-pico-reader)
+- [KiikoRead 固件](https://github.com/wegooo-cell/read-pico-reader)
 - WhiteOS
 
 ## 当前目标
 
-- 支持 Read Pico、CrossPoint、WhiteOS 和 kiiko 厂长 Fork 固件。
+- 支持 Read Pico、CrossPoint、WhiteOS 和 KiikoRead 固件。
 - 支持横向增加其他设备和固件。
 - 新增设备且不增加通用能力时，不要求上层修改调用代码。
 - WebDAV、mDNS 等高阶能力暂不作为首版目标。
@@ -63,7 +63,7 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 ## 开发状态
 
-当前提供 Read Pico、CrossPoint、WhiteOS 与 kiiko 厂长 Fork 固件的文件管理；Wi-Fi、字体、
+当前提供 Read Pico、CrossPoint、WhiteOS 与 KiikoRead 固件的文件管理；Wi-Fi、字体、
 OPDS 服务器、壁纸和动态设置等能力按固件声明开放，具体见 [SDK 接口文档](docs/sdk/interface.md)。
 
 Android/iOS 上层通过 `BooksendSdk.supportedDevices()` 查询支持的固件名称及连接表单字段，

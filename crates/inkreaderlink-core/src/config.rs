@@ -77,7 +77,7 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
         DeviceKind::ReadPico => read_pico_definition(),
         DeviceKind::CrossPoint => crosspoint_definition(),
         DeviceKind::WhiteOs => whiteos_definition(),
-        DeviceKind::WegoCellFork => wegooo_cell_fork_definition(),
+        DeviceKind::KiikoRead => kiikoread_definition(),
     }
 }
 
@@ -87,7 +87,7 @@ pub fn built_in_definitions() -> Vec<DeviceDefinition> {
         read_pico_definition(),
         crosspoint_definition(),
         whiteos_definition(),
-        wegooo_cell_fork_definition(),
+        kiikoread_definition(),
     ]
 }
 
@@ -201,9 +201,9 @@ pub fn whiteos_definition() -> DeviceDefinition {
 }
 
 #[must_use]
-pub fn wegooo_cell_fork_definition() -> DeviceDefinition {
+pub fn kiikoread_definition() -> DeviceDefinition {
     let mut definition = DeviceDefinition::upload_only(
-        "wegooo-cell-fork",
+        "kiikoread",
         DeviceFileFormats {
             accepts_any_upload_format: false,
             upload_extensions: extensions(&["epub", "txt"]),
@@ -212,7 +212,7 @@ pub fn wegooo_cell_fork_definition() -> DeviceDefinition {
             readable_extensions: extensions(&["epub", "txt"]),
         },
     )
-    .with_display_name("kiiko 厂长 Fork固件")
+    .with_display_name("KiikoRead")
     .with_display_resolution(684, 1216)
     .with_connection_field(DeviceConnectionField {
         key: "address".to_owned(),

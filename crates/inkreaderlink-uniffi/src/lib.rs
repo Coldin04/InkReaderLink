@@ -761,7 +761,7 @@ impl SdkDeviceClient {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
             "whiteos" => DeviceKind::WhiteOs,
-            "wegooo-cell-fork" => DeviceKind::WegoCellFork,
+            "kiikoread" => DeviceKind::KiikoRead,
             _ => {
                 return Err(SdkOperationError::Unsupported {
                     detail: format!("unknown device type: {device_type}"),
@@ -1276,7 +1276,7 @@ impl BooksendSdk {
             "read-pico" => DeviceKind::ReadPico,
             "crosspoint" => DeviceKind::CrossPoint,
             "whiteos" => DeviceKind::WhiteOs,
-            "wegooo-cell-fork" => DeviceKind::WegoCellFork,
+            "kiikoread" => DeviceKind::KiikoRead,
             _ => return None,
         };
         Some(DeviceProfile::baseline(kind).into())

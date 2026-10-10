@@ -1,4 +1,4 @@
-//! `wegooo-cell-fork` protocol adapter.
+//! `kiikoread` protocol adapter.
 
 use std::{path::Path, path::PathBuf};
 
@@ -15,7 +15,7 @@ const WALLPAPER_DIRECTORY: &str = "pictures";
 const WALLPAPER_EXTENSIONS: [&str; 3] = ["jpg", "jpeg", "png"];
 
 #[derive(Debug, Default)]
-pub struct WegoCellForkAdapter;
+pub struct KiikoReadAdapter;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +35,7 @@ struct FileListItem {
     is_directory: bool,
 }
 
-impl WegoCellForkAdapter {
+impl KiikoReadAdapter {
     #[must_use]
     pub fn info_request() -> HttpRequest {
         HttpRequest::new(HttpMethod::Get, "/info")
@@ -49,7 +49,7 @@ impl WegoCellForkAdapter {
     /// required firmware fields are missing.
     pub fn validate_info(body: &[u8]) -> Result<(), SdkError> {
         let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
-            SdkError::RemoteFailure(format!("invalid wegooo-cell-fork device info: {error}"))
+            SdkError::RemoteFailure(format!("invalid KiikoRead device info: {error}"))
         })?;
         let valid = info.is_object()
             && info
@@ -80,7 +80,7 @@ impl WegoCellForkAdapter {
             Ok(())
         } else {
             Err(SdkError::RemoteFailure(
-                "invalid wegooo-cell-fork device info: required fields are missing".to_owned(),
+                "invalid KiikoRead device info: required fields are missing".to_owned(),
             ))
         }
     }
@@ -94,7 +94,7 @@ impl WegoCellForkAdapter {
     pub fn parse_info(body: &[u8]) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         Self::validate_info(body)?;
         let info: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
-            SdkError::RemoteFailure(format!("invalid wegooo-cell-fork device info: {error}"))
+            SdkError::RemoteFailure(format!("invalid KiikoRead device info: {error}"))
         })?;
         Ok([
             ("is_flash", "storage_is_flash"),
@@ -125,8 +125,8 @@ impl WegoCellForkAdapter {
     ///
     /// Returns `SdkError::RemoteFailure` when the response is invalid JSON.
     pub fn parse_wifi_info(body: &str) -> Result<Vec<WifiNetwork>, SdkError> {
-        let info: ForkWifiInfo = serde_json::from_str(body).map_err(|error| {
-            SdkError::RemoteFailure(format!("invalid wegooo-cell-fork Wi-Fi info: {error}"))
+        let info: KiikoReadWifiInfo = serde_json::from_str(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid KiikoRead Wi-Fi info: {error}"))
         })?;
         Ok(info
             .wifi_ssid
@@ -148,7 +148,7 @@ impl WegoCellForkAdapter {
     /// Returns `SdkError::InvalidArgument` if the credentials cannot be
     /// serialized.
     pub fn wifi_save_request(credential: &WifiCredential) -> Result<HttpRequest, SdkError> {
-        let body = serde_json::to_vec(&ForkWifiCredential {
+        let body = serde_json::to_vec(&KiikoReadWifiCredential {
             ssid: &credential.ssid,
             password: credential.password.as_deref().unwrap_or_default(),
         })
@@ -184,7 +184,7 @@ impl WegoCellForkAdapter {
         body: &str,
     ) -> Result<AdapterFilePage, SdkError> {
         let response: FileListResponse = serde_json::from_str(body).map_err(|error| {
-            SdkError::RemoteFailure(format!("invalid wegooo-cell-fork file list: {error}"))
+            SdkError::RemoteFailure(format!("invalid KiikoRead file list: {error}"))
         })?;
         let base = location_path(location);
         let entries = response
@@ -337,13 +337,13 @@ struct FileMutation<'a> {
 }
 
 #[derive(Deserialize)]
-struct ForkWifiInfo {
+struct KiikoReadWifiInfo {
     wifi_configured: bool,
     wifi_ssid: Option<String>,
 }
 
 #[derive(serde::Serialize)]
-struct ForkWifiCredential<'a> {
+struct KiikoReadWifiCredential<'a> {
     ssid: &'a str,
     password: &'a str,
 }
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn file_list_accepts_firmware_directory_field() {
         let body = r#"{"path":"","total":2,"page":0,"pages":1,"items":[{"name":"books","directory":true,"size":0},{"name":"cover.jpg","directory":false,"size":237355}]}"#;
-        let page = WegoCellForkAdapter::parse_file_page(&FileLocation::Root, body).unwrap();
+        let page = KiikoReadAdapter::parse_file_page(&FileLocation::Root, body).unwrap();
 
         assert_eq!(page.entries.len(), 2);
         assert_eq!(page.entries[0].kind, FileKind::Directory);
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn wallpaper_list_accepts_firmware_directory_field() {
         let body = r#"{"path":"pictures","total":1,"page":0,"pages":1,"items":[{"name":"442260.jpg","directory":false,"size":237355}]}"#;
-        let page = WegoCellForkAdapter::parse_wallpaper_page(body).unwrap();
+        let page = KiikoReadAdapter::parse_wallpaper_page(body).unwrap();
 
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].name, "442260.jpg");

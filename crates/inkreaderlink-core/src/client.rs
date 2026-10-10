@@ -12,8 +12,8 @@ use crate::{
     OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions,
     UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential, WifiNetwork,
     adapters::{
-        crosspoint::CrossPointAdapter, read_pico::ReadPicoAdapter,
-        wegooo_cell_fork::WegoCellForkAdapter, whiteos::WhiteOsAdapter,
+        crosspoint::CrossPointAdapter, kiikoread::KiikoReadAdapter, read_pico::ReadPicoAdapter,
+        whiteos::WhiteOsAdapter,
     },
     capability::ids,
     model::{ConflictPolicy, SettingsValidationPolicy},
@@ -74,7 +74,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
             DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
             DeviceKind::WhiteOs => WhiteOsAdapter::list_request(&FileLocation::Root),
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::info_request(),
+            DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
         };
         let response = self.transport.execute(request).await?;
         ensure_success(&response, "verify device connection")?;
@@ -82,7 +82,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => ReadPicoAdapter::validate_info(&response.body),
             DeviceKind::CrossPoint => CrossPointAdapter::validate_status(&response.body),
             DeviceKind::WhiteOs => WhiteOsAdapter::validate_file_list(&response.body),
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::validate_info(&response.body),
+            DeviceKind::KiikoRead => KiikoReadAdapter::validate_info(&response.body),
         }
     }
 
@@ -102,7 +102,7 @@ impl DeviceClient {
                     "WhiteOS does not expose device info".to_owned(),
                 ));
             }
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::info_request(),
+            DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
         };
         let response = self.transport.execute(request).await?;
         ensure_success(&response, "get device info")?;
@@ -110,7 +110,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => ReadPicoAdapter::parse_info(&response.body),
             DeviceKind::CrossPoint => CrossPointAdapter::parse_status(&response.body),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no device info capability"),
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::parse_info(&response.body),
+            DeviceKind::KiikoRead => KiikoReadAdapter::parse_info(&response.body),
         }
     }
 
@@ -128,7 +128,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => self.list_read_pico(location).await,
             DeviceKind::CrossPoint => self.list_crosspoint(&location).await,
             DeviceKind::WhiteOs => self.list_whiteos(&location).await,
-            DeviceKind::WegoCellFork => self.list_wegooo_cell_fork(&location).await,
+            DeviceKind::KiikoRead => self.list_kiikoread(&location).await,
         }
     }
 
@@ -172,8 +172,8 @@ impl DeviceClient {
                 self.upload_crosspoint(&local_path, &file_name, &location, &options, progress)
                     .await?
             }
-            DeviceKind::WegoCellFork => {
-                self.upload_wegooo_cell_fork(local_path, file_name.clone(), options)
+            DeviceKind::KiikoRead => {
+                self.upload_kiikoread(local_path, file_name.clone(), options)
                     .await?;
                 false
             }
@@ -207,9 +207,9 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::delete_request(read_pico_name(&path)?),
             DeviceKind::CrossPoint => CrossPointAdapter::delete_request(&path),
-            DeviceKind::WegoCellFork => {
+            DeviceKind::KiikoRead => {
                 let relative = path.strip_prefix('/').unwrap_or(&path);
-                WegoCellForkAdapter::delete_path_request(relative)?
+                KiikoReadAdapter::delete_path_request(relative)?
             }
             DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&path),
         };
@@ -251,7 +251,7 @@ impl DeviceClient {
         for (index, (path, name)) in paths.iter().zip(names).enumerate() {
             let request = match self.kind {
                 DeviceKind::ReadPico => ReadPicoAdapter::delete_request(&name),
-                DeviceKind::WegoCellFork => WegoCellForkAdapter::delete_path_request(&name)?,
+                DeviceKind::KiikoRead => KiikoReadAdapter::delete_path_request(&name)?,
                 DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&name),
                 DeviceKind::CrossPoint => unreachable!("CrossPoint exits through batch endpoint"),
             };
@@ -461,9 +461,9 @@ impl DeviceClient {
                     .execute(CrossPointAdapter::wifi_list_request())
                     .await?
             }
-            DeviceKind::WegoCellFork => {
+            DeviceKind::KiikoRead => {
                 self.transport
-                    .execute(WegoCellForkAdapter::info_request())
+                    .execute(KiikoReadAdapter::info_request())
                     .await?
             }
             DeviceKind::WhiteOs => {
@@ -477,7 +477,7 @@ impl DeviceClient {
         match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::parse_wifi_info(&body),
             DeviceKind::CrossPoint => CrossPointAdapter::parse_wifi_list(&body),
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::parse_wifi_info(&body),
+            DeviceKind::KiikoRead => KiikoReadAdapter::parse_wifi_info(&body),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no Wi-Fi capability"),
         }
     }
@@ -498,7 +498,7 @@ impl DeviceClient {
         let request = match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::wifi_save_request(&credential)?,
             DeviceKind::CrossPoint => CrossPointAdapter::wifi_save_request(&credential)?,
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::wifi_save_request(&credential)?,
+            DeviceKind::KiikoRead => KiikoReadAdapter::wifi_save_request(&credential)?,
             DeviceKind::WhiteOs => {
                 return Err(SdkError::Unsupported(
                     "WhiteOS does not expose Wi-Fi management".to_owned(),
@@ -525,7 +525,7 @@ impl DeviceClient {
                     )
                 })?)?
             }
-            DeviceKind::WegoCellFork => WegoCellForkAdapter::wifi_delete_request(),
+            DeviceKind::KiikoRead => KiikoReadAdapter::wifi_delete_request(),
             DeviceKind::WhiteOs => {
                 return Err(SdkError::Unsupported(
                     "WhiteOS does not expose Wi-Fi management".to_owned(),
@@ -535,7 +535,7 @@ impl DeviceClient {
         self.execute_success(request, "delete Wi-Fi network").await
     }
 
-    /// Lists wallpaper images stored on the Fork firmware's TF card.
+    /// Lists wallpaper images stored on the `KiikoRead` firmware's TF card.
     ///
     /// # Errors
     ///
@@ -547,10 +547,10 @@ impl DeviceClient {
         loop {
             let response = self
                 .transport
-                .execute(WegoCellForkAdapter::wallpapers_list_request(page_index))
+                .execute(KiikoReadAdapter::wallpapers_list_request(page_index))
                 .await?;
-            ensure_wegooo_cell_fork_success(&response, "list wallpapers")?;
-            let page = WegoCellForkAdapter::parse_wallpaper_page(&response.text_lossy())?;
+            ensure_kiikoread_success(&response, "list wallpapers")?;
+            let page = KiikoReadAdapter::parse_wallpaper_page(&response.text_lossy())?;
             entries.extend(page.entries);
             page_index += 1;
             if page_index >= page.pages {
@@ -614,7 +614,7 @@ impl DeviceClient {
         let _guard = self.mutation.lock().await;
         let response = self
             .transport
-            .execute(WegoCellForkAdapter::wallpaper_upload_request(
+            .execute(KiikoReadAdapter::wallpaper_upload_request(
                 local_path,
                 file_name.clone(),
                 overwrite,
@@ -628,7 +628,7 @@ impl DeviceClient {
         {
             return Err(SdkError::CommittedWithWarning(body));
         }
-        ensure_wegooo_cell_fork_success(&response, "upload wallpaper")?;
+        ensure_kiikoread_success(&response, "upload wallpaper")?;
         Ok(WallpaperUploadResult {
             entry: FileEntry {
                 name: file_name.clone(),
@@ -666,7 +666,7 @@ impl DeviceClient {
         }
         let _guard = self.mutation.lock().await;
         self.execute_success(
-            WegoCellForkAdapter::delete_wallpaper_request(&file_name)?,
+            KiikoReadAdapter::delete_wallpaper_request(&file_name)?,
             "delete wallpaper",
         )
         .await
@@ -804,8 +804,8 @@ impl DeviceClient {
             DeviceKind::CrossPoint => {
                 CrossPointAdapter::font_upload_request(&family, local_path, file_name)
             }
-            DeviceKind::WegoCellFork => {
-                WegoCellForkAdapter::font_upload_request(local_path, file_name, overwrite)
+            DeviceKind::KiikoRead => {
+                KiikoReadAdapter::font_upload_request(local_path, file_name, overwrite)
             }
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
         };
@@ -830,7 +830,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => ensure_read_pico_success(&response, "upload font"),
             DeviceKind::CrossPoint => ensure_success(&response, "upload font"),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
-            DeviceKind::WegoCellFork => ensure_wegooo_cell_fork_success(&response, "upload font"),
+            DeviceKind::KiikoRead => ensure_kiikoread_success(&response, "upload font"),
         }
     }
 
@@ -962,19 +962,16 @@ impl DeviceClient {
         }
     }
 
-    async fn list_wegooo_cell_fork(
-        &self,
-        location: &FileLocation,
-    ) -> Result<Vec<FileEntry>, SdkError> {
+    async fn list_kiikoread(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
         let mut page_index = 0;
         let mut entries = Vec::new();
         loop {
             let response = self
                 .transport
-                .execute(WegoCellForkAdapter::file_list_request(location, page_index))
+                .execute(KiikoReadAdapter::file_list_request(location, page_index))
                 .await?;
-            ensure_wegooo_cell_fork_success(&response, "list files")?;
-            let page = WegoCellForkAdapter::parse_file_page(location, &response.text_lossy())?;
+            ensure_kiikoread_success(&response, "list files")?;
+            let page = KiikoReadAdapter::parse_file_page(location, &response.text_lossy())?;
             entries.extend(page.entries);
             page_index += 1;
             if page_index >= page.pages {
@@ -1032,7 +1029,7 @@ impl DeviceClient {
         ensure_read_pico_success(&response, "upload")
     }
 
-    async fn upload_wegooo_cell_fork(
+    async fn upload_kiikoread(
         &self,
         local_path: PathBuf,
         file_name: String,
@@ -1046,17 +1043,17 @@ impl DeviceClient {
             }
             ConflictPolicy::ReplaceWithBackup => {
                 return Err(SdkError::Unsupported(
-                    "wegooo-cell-fork uses the firmware's explicit overwrite operation".to_owned(),
+                    "KiikoRead uses the firmware's explicit overwrite operation".to_owned(),
                 ));
             }
         };
         let response = self
             .transport
-            .execute(WegoCellForkAdapter::book_upload_request(
+            .execute(KiikoReadAdapter::book_upload_request(
                 local_path, file_name, overwrite,
             ))
             .await?;
-        ensure_wegooo_cell_fork_success(&response, "upload")
+        ensure_kiikoread_success(&response, "upload")
     }
 
     async fn upload_whiteos(
@@ -1283,7 +1280,7 @@ impl DeviceClient {
             DeviceKind::ReadPico => ensure_read_pico_success(&response, operation),
             DeviceKind::CrossPoint => ensure_success(&response, operation),
             DeviceKind::WhiteOs => ensure_whiteos_success(&response, operation),
-            DeviceKind::WegoCellFork => ensure_wegooo_cell_fork_success(&response, operation),
+            DeviceKind::KiikoRead => ensure_kiikoread_success(&response, operation),
         }
     }
 
@@ -1370,10 +1367,7 @@ fn ensure_success(response: &HttpResponse, operation: &str) -> Result<(), SdkErr
     }
 }
 
-fn ensure_wegooo_cell_fork_success(
-    response: &HttpResponse,
-    operation: &str,
-) -> Result<(), SdkError> {
+fn ensure_kiikoread_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
     let body = response.text_lossy();
     match response.status {
         200..=299 => Ok(()),
