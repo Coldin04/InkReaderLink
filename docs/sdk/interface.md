@@ -31,21 +31,31 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 `connectionFields`。设备选择列表和连接表单应使用这个目录，不应在 App 中维护另一份
 固件名称或字段清单。
 
-`SdkConnectionField` 以 `key` 标识保存值，包含显示标签 `label`、是否必填的
-`required` 和输入类型 `kind`：`Text` 渲染文本框，`Address` 渲染地址输入框并允许
-接入原生扫码，带 `options` 的 `Choice` 渲染下拉列表，`Toggle` 渲染开关。新增固件时，
+`SdkConnectionField` 以 `key` 标识值，包含显示标签 `label`、是否在初次提交时必填的
+`required`、输入类型 `kind` 和保存责任 `retention`：`Text` 渲染文本框，`Secret`
+渲染密码框，`Address` 渲染地址输入框并允许接入原生扫码，带 `options` 的 `Choice`
+渲染下拉列表，`Toggle` 渲染开关。`AppManaged` 值由 App 保存并在每次连接时提交；
+`Session` 值只由 SDK 当前客户端保存，客户端销毁后失效。新增固件时，
 在 `DeviceDefinition` 中声明显示名称和连接字段；只有 SDK 路由及 adapter 支持后，
 才能把固件加入该目录。
 
-连接表单值通过 `SdkConnectionParameter` 提交：文本和地址使用相应的 `SdkConnectionValue`
+连接表单值通过 `SdkConnectionParameter` 提交：文本、密码和地址使用相应的 `SdkConnectionValue`
 变体，下拉值使用从零开始的选项索引，开关使用布尔值。SDK 根据所选设备定义检查字段
 是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
 
-当前 Read Pico、CrossPoint、WhiteOS 与 KiikoRead 固件都声明一个必填 `Address` 字段，key 为 `address`。
-保存的连接值应随设备记录持久化；旧版仅保存 `address` 的记录可迁移为同名字段。
+当前设备都声明一个必填 `Address` 字段，key 为 `address`。JustRead 的设备名称为
+`JustRead(实验性)`，另声明 `Secret` 字段 `access_code`（显示名“设备访问码”，
+`Session`）。App 只保存 `AppManaged` 字段；旧版仅保存 `address` 的记录可迁移为同名字段。
 设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
 SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
 仍可用于只需设备地址的调用。SDK 接受裸 IPv4/hostname 或完整 HTTP/HTTPS URL。
+
+连接 JustRead 时先只提交地址。固件返回 401 后，SDK 返回可按错误变体识别的
+`CredentialRequired { key: "access_code" }`；App 再按字段声明弹出密码输入，附上
+`SdkConnectionValue.Secret` 重试连接。输入错误返回 `CredentialRejected`，两者都保留
+字段 `key` 供 App 显示对应提示。连接成功后，SDK 当前客户端在后续请求中使用访问码；
+App 不保存此码，下次连接重新探测。固定 API key 等长期值应声明为 `AppManaged`，
+由 App 保存并在每次连接时传入。声明只包含显示名称和键名，不包含用户的键值。
 
 ### 设备信息 capability
 
@@ -101,10 +111,10 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint | WhiteOS | KiikoRead 固件 |
-|---|---:|---:|---:|---:|
-| `can_list_directories` | false | true | true | true |
-| `can_choose_upload_directory` | false | true | true | false |
+| 字段 | Read Pico | CrossPoint | WhiteOS | KiikoRead 固件 | JustRead |
+|---|---:|---:|---:|---:|---:|
+| `can_list_directories` | false | true | true | true | true |
+| `can_choose_upload_directory` | false | true | true | false | true |
 
 固件格式声明：
 
@@ -114,6 +124,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
 | WhiteOS | API 接受任意扩展名 | — | — | TXT、EPUB、PDF |
 | KiikoRead 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
+| JustRead | 任意文件 | — | — | EPUB、TXT |
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
 `upload_extensions` 过滤。`readable_extensions` 表示设备原生阅读格式。
@@ -160,6 +171,8 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
 - `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
 - `KiikoReadAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
+- `JustReadAdapter`：`Root` 列出 SD 卡根目录，默认上传到书架扫描的 `/books`；
+  `Directory(path)` 可列出或上传到指定目录。
 
 ## 可调用 API
 
@@ -172,7 +185,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 
 实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型验证设备：
 Read Pico 与 KiikoRead 固件检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
-读取根目录 `/api/list?path=/`。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
+读取根目录 `/api/list?path=/`，JustRead 读取根目录并处理访问码挑战。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
 同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
 
 每个调用先检查 profile 中的 capability，未声明时返回 `Unsupported`。文件上传
@@ -248,9 +261,12 @@ UI 不应将其作为 HTML 执行。
 若 POST 成功但重新读取失败，返回 `CommittedWithWarning`，App 应提示设置可能
 已保存并允许刷新。Read Pico 未声明设置能力，调用返回 `Unsupported`。
 
-CrossPoint WebSocket 上传可传入 `SdkUploadProgressObserver`。固件每次返回
-`PROGRESS:<received>:<total>` 时，SDK 将真实的已接收字节数和总字节数回调给
-上层；HTTP 与 Read Pico 上传当前不承诺中途进度。
+上传可传入 `SdkUploadProgressObserver`。CrossPoint WebSocket 上传时，固件每次
+返回 `PROGRESS:<received>:<total>`，SDK 将设备已接收字节数回调给上层。
+JustRead HTTP 上传时，SDK 回调已从本地文件流交给 HTTP 请求体的字节数，
+与设备自带网页的上传进度同属客户端传输进度；到达文件大小仍须等待设备成功响应。
+未收到回调的上传应显示不确定进度，`upload.websocket` 只表示可选用 WebSocket
+传输，不表示是否存在上传进度回调。Read Pico 图书上传当前不承诺中途进度。
 
 连接入口接受裸 IPv4/hostname（SDK 自动补 `http://`）或完整 HTTP/HTTPS URL。
 二维码解析由原生 App 完成；Read Pico 网页码和 CrossPoint STA 网页码直接提供
@@ -264,6 +280,7 @@ IPv4 URL，CrossPoint AP 网页码可能提供 `crosspoint.local`。
 - CrossPoint 的目录列表由 SDK 转换为相同的 `FileEntry` 列表。
 - WhiteOS 的完整目录列表由 SDK 转换为相同的 `FileEntry` 列表。
 - KiikoRead 固件的普通文件列表及壁纸列表分页由 SDK 内部处理。
+- JustRead 最多返回 256 项且无分页；`truncated: true` 时 SDK 返回错误，不把不完整列表当作完整结果。
 - App 不应拼接固件 endpoint；位置、分页和协议参数由 SDK 处理。
 
 ### WhiteOS 文件 API
@@ -281,3 +298,21 @@ WhiteOS 使用 `GET /api/list?path=...` 返回 `{ path, entries }`，每个条�
 WhiteOS 声明目录列表、选择上传目录、删除、下载、重命名和创建目录能力；没有移动、
 覆盖上传、Wi-Fi、字体或设备信息接口。上传 API 未限制扩展名，设备原生可读格式尚未
 确认，因此 SDK 允许任意扩展名上传，并将可读格式留空。
+
+### JustRead 文件传输
+
+用户须先在设备的文件传输页面启动热点或局域网服务。该服务每次启动生成新的访问码；
+未携码访问文件接口时返回 401。SDK 使用 `GET /api/list` 探测，在当前客户端会话中
+通过 `X-Transfer-Token` 请求头发送访问码。访问码不写入设备定义或持久存储，
+SDK 错误与调试输出也不包含其值。若服务重启使访问码失效，后续操作返回
+`CredentialRejected { key: "access_code" }`，App 应断开并重新连接。
+
+目录与文件路径按 UTF-8 编码后放入 Base64 请求头。上传使用流式
+`POST /api/upload`，`Root` 目标为 `/books`，同名文件返回冲突且不覆盖。
+下载先通过 `POST /api/download-ticket` 获取限时、一次性票据，再用该票据
+流式请求 `GET /api/download-file`；SDK 只接受指向同一设备该端点的票据 URL。
+固件没有删除、重命名、移动或创建目录接口，SDK 不声明对应能力。固件单文件上传
+上限为 `0x7fff0000` 字节；SDK 可回调 HTTP 请求体的字节进度，回调达到 100%
+不代表设备已完成保存，仍以 `/api/upload` 的成功响应为准。上传期间按实际读取
+字节判断空闲：请求体传输停滞 60 秒、请求体完成后等待设备响应停滞 180 秒才超时；
+以每秒一次的检查采样，无须对每次进度回调重设计时器。

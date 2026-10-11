@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -12,7 +12,10 @@ use crate::{
     OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions,
     UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential, WifiNetwork,
     adapters::{
-        crosspoint::CrossPointAdapter, kiikoread::KiikoReadAdapter, read_pico::ReadPicoAdapter,
+        crosspoint::CrossPointAdapter,
+        justread::{ACCESS_CODE_KEY, JustReadAdapter},
+        kiikoread::KiikoReadAdapter,
+        read_pico::ReadPicoAdapter,
         whiteos::WhiteOsAdapter,
     },
     capability::ids,
@@ -21,13 +24,24 @@ use crate::{
     transport::{HttpResponse, ReqwestTransport, SharedTransport, WebSocketUpload},
 };
 
-#[derive(Debug)]
 pub struct DeviceClient {
     kind: DeviceKind,
     profile: DeviceProfile,
     transport: SharedTransport,
     mutation: Mutex<()>,
     settings_validation_policy: SettingsValidationPolicy,
+    session_credentials: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for DeviceClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeviceClient")
+            .field("kind", &self.kind)
+            .field("profile", &self.profile)
+            .field("session_credential_count", &self.session_credentials.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeviceClient {
@@ -49,7 +63,21 @@ impl DeviceClient {
             transport,
             mutation: Mutex::new(()),
             settings_validation_policy: SettingsValidationPolicy::Permissive,
+            session_credentials: HashMap::new(),
         }
+    }
+
+    /// Transfers caller-supplied session secrets into this client only.
+    #[must_use]
+    pub fn with_session_credentials(mut self, credentials: HashMap<String, String>) -> Self {
+        self.session_credentials = credentials;
+        self
+    }
+
+    fn justread_access_code(&self) -> Option<&str> {
+        self.session_credentials
+            .get(ACCESS_CODE_KEY)
+            .map(String::as_str)
     }
 
     /// Selects validation strictness for `CrossPoint` dynamic settings.
@@ -75,14 +103,26 @@ impl DeviceClient {
             DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
             DeviceKind::WhiteOs => WhiteOsAdapter::list_request(&FileLocation::Root),
             DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
+            DeviceKind::JustRead => {
+                JustReadAdapter::list_request(&FileLocation::Root, self.justread_access_code())?
+            }
         };
         let response = self.transport.execute(request).await?;
+        if self.kind == DeviceKind::JustRead {
+            ensure_justread_success(
+                &response,
+                "verify device connection",
+                self.justread_access_code(),
+            )?;
+            return JustReadAdapter::validate_listing(&response.body);
+        }
         ensure_success(&response, "verify device connection")?;
         match self.kind {
             DeviceKind::ReadPico => ReadPicoAdapter::validate_info(&response.body),
             DeviceKind::CrossPoint => CrossPointAdapter::validate_status(&response.body),
             DeviceKind::WhiteOs => WhiteOsAdapter::validate_file_list(&response.body),
             DeviceKind::KiikoRead => KiikoReadAdapter::validate_info(&response.body),
+            DeviceKind::JustRead => unreachable!("JustRead verified above"),
         }
     }
 
@@ -103,6 +143,11 @@ impl DeviceClient {
                 ));
             }
             DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
+            DeviceKind::JustRead => {
+                return Err(SdkError::Unsupported(
+                    "JustRead does not expose device info".to_owned(),
+                ));
+            }
         };
         let response = self.transport.execute(request).await?;
         ensure_success(&response, "get device info")?;
@@ -111,6 +156,7 @@ impl DeviceClient {
             DeviceKind::CrossPoint => CrossPointAdapter::parse_status(&response.body),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no device info capability"),
             DeviceKind::KiikoRead => KiikoReadAdapter::parse_info(&response.body),
+            DeviceKind::JustRead => unreachable!("JustRead has no device info capability"),
         }
     }
 
@@ -129,6 +175,7 @@ impl DeviceClient {
             DeviceKind::CrossPoint => self.list_crosspoint(&location).await,
             DeviceKind::WhiteOs => self.list_whiteos(&location).await,
             DeviceKind::KiikoRead => self.list_kiikoread(&location).await,
+            DeviceKind::JustRead => self.list_justread(&location).await,
         }
     }
 
@@ -160,6 +207,11 @@ impl DeviceClient {
                 "upload file must not be empty".to_owned(),
             ));
         }
+        if self.kind == DeviceKind::JustRead && size > 0x7fff_0000 {
+            return Err(SdkError::InvalidArgument(
+                "JustRead upload exceeds the firmware size limit".to_owned(),
+            ));
+        }
 
         let _guard = self.mutation.lock().await;
         let used_websocket = match self.kind {
@@ -182,8 +234,17 @@ impl DeviceClient {
                     .await?;
                 false
             }
+            DeviceKind::JustRead => {
+                self.upload_justread(local_path, &file_name, &location, options, progress)
+                    .await?;
+                false
+            }
         };
-        let path = join_location(&location, &file_name);
+        let path = if self.kind == DeviceKind::JustRead {
+            JustReadAdapter::upload_path(&location, &file_name)?
+        } else {
+            join_location(&location, &file_name)
+        };
         Ok(UploadResult {
             entry: FileEntry {
                 name: file_name.clone(),
@@ -212,6 +273,7 @@ impl DeviceClient {
                 KiikoReadAdapter::delete_path_request(relative)?
             }
             DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&path),
+            DeviceKind::JustRead => unreachable!("JustRead has no delete capability"),
         };
         self.execute_success(request, "delete").await
     }
@@ -254,6 +316,7 @@ impl DeviceClient {
                 DeviceKind::KiikoRead => KiikoReadAdapter::delete_path_request(&name)?,
                 DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&name),
                 DeviceKind::CrossPoint => unreachable!("CrossPoint exits through batch endpoint"),
+                DeviceKind::JustRead => unreachable!("JustRead has no delete capability"),
             };
             if let Err(error) = self.execute_success(request, "delete").await {
                 return Err(batch_operation_error(
@@ -276,9 +339,13 @@ impl DeviceClient {
     pub async fn download(&self, path: String, destination: PathBuf) -> Result<(), SdkError> {
         self.require(ids::FILE_DOWNLOAD)?;
         validate_remote_path(&path)?;
+        if self.kind == DeviceKind::JustRead {
+            return self.download_justread(&path, destination).await;
+        }
         let request = match self.kind {
             DeviceKind::CrossPoint => CrossPointAdapter::download_request(&path),
             DeviceKind::WhiteOs => WhiteOsAdapter::download_request(&path),
+            DeviceKind::JustRead => unreachable!("JustRead download handled above"),
             _ => {
                 return Err(SdkError::Unsupported(
                     "device does not support downloads".to_owned(),
@@ -471,6 +538,7 @@ impl DeviceClient {
                     "WhiteOS does not expose Wi-Fi management".to_owned(),
                 ));
             }
+            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
         };
         ensure_success(&response, "list Wi-Fi networks")?;
         let body = response.text_lossy();
@@ -479,6 +547,7 @@ impl DeviceClient {
             DeviceKind::CrossPoint => CrossPointAdapter::parse_wifi_list(&body),
             DeviceKind::KiikoRead => KiikoReadAdapter::parse_wifi_info(&body),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no Wi-Fi capability"),
+            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
         }
     }
 
@@ -504,6 +573,7 @@ impl DeviceClient {
                     "WhiteOS does not expose Wi-Fi management".to_owned(),
                 ));
             }
+            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
         };
         self.execute_success(request, "save Wi-Fi network").await
     }
@@ -531,6 +601,7 @@ impl DeviceClient {
                     "WhiteOS does not expose Wi-Fi management".to_owned(),
                 ));
             }
+            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
         };
         self.execute_success(request, "delete Wi-Fi network").await
     }
@@ -808,6 +879,7 @@ impl DeviceClient {
                 KiikoReadAdapter::font_upload_request(local_path, file_name, overwrite)
             }
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
+            DeviceKind::JustRead => unreachable!("JustRead has no font upload capability"),
         };
         let response = self
             .transport
@@ -831,6 +903,7 @@ impl DeviceClient {
             DeviceKind::CrossPoint => ensure_success(&response, "upload font"),
             DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
             DeviceKind::KiikoRead => ensure_kiikoread_success(&response, "upload font"),
+            DeviceKind::JustRead => unreachable!("JustRead has no font upload capability"),
         }
     }
 
@@ -998,6 +1071,21 @@ impl DeviceClient {
         Ok(WhiteOsAdapter::parse_file_list(&response.text_lossy())?.entries)
     }
 
+    async fn list_justread(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
+        let request = JustReadAdapter::list_request(location, self.justread_access_code())?;
+        let response = self.transport.execute(request).await?;
+        ensure_justread_success(&response, "list files", self.justread_access_code())?;
+        JustReadAdapter::parse_listing(location, &response.body)
+    }
+
+    async fn download_justread(&self, path: &str, destination: PathBuf) -> Result<(), SdkError> {
+        let request = JustReadAdapter::download_ticket_request(path, self.justread_access_code())?;
+        let response = self.transport.execute(request).await?;
+        ensure_justread_success(&response, "request download", self.justread_access_code())?;
+        let download = JustReadAdapter::download_request(&response.body)?;
+        self.transport.download(download, destination).await
+    }
+
     async fn upload_read_pico(
         &self,
         local_path: PathBuf,
@@ -1098,6 +1186,39 @@ impl DeviceClient {
             ))
             .await?;
         ensure_whiteos_success(&response, "upload")
+    }
+
+    async fn upload_justread(
+        &self,
+        local_path: PathBuf,
+        file_name: &str,
+        location: &FileLocation,
+        options: UploadOptions,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+    ) -> Result<(), SdkError> {
+        if options.conflict_policy != ConflictPolicy::Fail {
+            return Err(SdkError::Unsupported(
+                "JustRead does not support overwrite".to_owned(),
+            ));
+        }
+        let destination = JustReadAdapter::upload_path(location, file_name)?;
+        let request =
+            JustReadAdapter::upload_request(local_path, &destination, self.justread_access_code())?;
+        let response = self
+            .transport
+            .execute_with_upload_progress(request, progress)
+            .await?;
+        ensure_justread_success(&response, "upload", self.justread_access_code())?;
+        let success: serde_json::Value =
+            serde_json::from_slice(&response.body).map_err(|error| {
+                SdkError::RemoteFailure(format!("invalid JustRead upload response: {error}"))
+            })?;
+        if success.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(SdkError::RemoteFailure(
+                "JustRead did not confirm the upload".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     async fn upload_crosspoint(
@@ -1281,6 +1402,9 @@ impl DeviceClient {
             DeviceKind::CrossPoint => ensure_success(&response, operation),
             DeviceKind::WhiteOs => ensure_whiteos_success(&response, operation),
             DeviceKind::KiikoRead => ensure_kiikoread_success(&response, operation),
+            DeviceKind::JustRead => {
+                ensure_justread_success(&response, operation, self.justread_access_code())
+            }
         }
     }
 
@@ -1365,6 +1489,25 @@ fn ensure_success(response: &HttpResponse, operation: &str) -> Result<(), SdkErr
             response.status
         ))),
     }
+}
+
+fn ensure_justread_success(
+    response: &HttpResponse,
+    operation: &str,
+    access_code: Option<&str>,
+) -> Result<(), SdkError> {
+    if response.status == 401 {
+        return Err(if access_code.is_some() {
+            SdkError::CredentialRejected {
+                key: ACCESS_CODE_KEY.to_owned(),
+            }
+        } else {
+            SdkError::CredentialRequired {
+                key: ACCESS_CODE_KEY.to_owned(),
+            }
+        });
+    }
+    ensure_success(response, operation)
 }
 
 fn ensure_kiikoread_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
@@ -1480,6 +1623,12 @@ fn batch_operation_error(
     path: &str,
     error: &SdkError,
 ) -> SdkError {
+    if matches!(
+        error,
+        SdkError::CredentialRequired { .. } | SdkError::CredentialRejected { .. }
+    ) {
+        return error.clone();
+    }
     SdkError::RemoteFailure(format!(
         "batch {operation} stopped after {completed}/{total} files; failed at {path}: {error}. Earlier completed files were not rolled back."
     ))
@@ -1537,6 +1686,8 @@ mod tests {
     struct MockTransport {
         responses: StdMutex<VecDeque<HttpResponse>>,
         requests: StdMutex<Vec<HttpRequest>>,
+        downloads: StdMutex<Vec<HttpRequest>>,
+        upload_progress_observers: StdMutex<Vec<bool>>,
     }
 
     impl MockTransport {
@@ -1544,6 +1695,8 @@ mod tests {
             Arc::new(Self {
                 responses: StdMutex::new(responses.into()),
                 requests: StdMutex::new(Vec::new()),
+                downloads: StdMutex::new(Vec::new()),
+                upload_progress_observers: StdMutex::new(Vec::new()),
             })
         }
 
@@ -1563,14 +1716,28 @@ mod tests {
                 .ok_or_else(|| SdkError::RemoteFailure("missing mock response".to_owned()))
         }
 
+        async fn execute_with_upload_progress(
+            &self,
+            request: HttpRequest,
+            progress: Option<Arc<dyn UploadProgressSink>>,
+        ) -> Result<HttpResponse, SdkError> {
+            self.upload_progress_observers
+                .lock()
+                .unwrap()
+                .push(progress.is_some());
+            if let Some(progress) = progress {
+                progress.report(2, 4);
+            }
+            self.execute(request).await
+        }
+
         async fn download(
             &self,
-            _request: HttpRequest,
+            request: HttpRequest,
             _destination: PathBuf,
         ) -> Result<(), SdkError> {
-            Err(SdkError::RemoteFailure(
-                "unexpected mock download".to_owned(),
-            ))
+            self.downloads.lock().unwrap().push(request);
+            Ok(())
         }
     }
 
@@ -1578,6 +1745,15 @@ mod tests {
         HttpResponse {
             status,
             body: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProgress(StdMutex<Vec<(u64, u64)>>);
+
+    impl UploadProgressSink for RecordingProgress {
+        fn report(&self, sent_bytes: u64, total_bytes: u64) {
+            self.0.lock().unwrap().push((sent_bytes, total_bytes));
         }
     }
 
@@ -1802,6 +1978,136 @@ mod tests {
         assert!(
             matches!(&requests[2].body, crate::transport::HttpBody::Json(body)
             if serde_json::from_slice::<serde_json::Value>(body).unwrap() == serde_json::json!({"showHiddenFiles":1}))
+        );
+    }
+
+    #[tokio::test]
+    async fn justread_probe_requests_code_and_rejects_wrong_code_without_leaking_it() {
+        let transport = MockTransport::new(vec![response(401, "访问码错误")]);
+        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone());
+        assert_eq!(
+            client.verify_connection().await,
+            Err(SdkError::CredentialRequired {
+                key: ACCESS_CODE_KEY.to_owned(),
+            })
+        );
+        assert!(
+            !transport.requests.lock().unwrap()[0]
+                .headers
+                .iter()
+                .any(|(name, _)| name == "X-Transfer-Token")
+        );
+
+        let transport = MockTransport::new(vec![response(401, "访问码错误")]);
+        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
+            .with_session_credentials(HashMap::from([(
+                ACCESS_CODE_KEY.to_owned(),
+                "WRONG".to_owned(),
+            )]));
+        assert_eq!(
+            client.verify_connection().await,
+            Err(SdkError::CredentialRejected {
+                key: ACCESS_CODE_KEY.to_owned(),
+            })
+        );
+        assert!(!format!("{client:?}").contains("WRONG"));
+    }
+
+    #[tokio::test]
+    async fn justread_session_uses_code_for_listing_and_uploads_books_to_shelf() {
+        let empty = r#"{"entries":[],"truncated":false}"#;
+        let transport = MockTransport::new(vec![
+            response(200, empty),
+            response(200, empty),
+            response(200, r#"{"ok":true}"#),
+        ]);
+        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
+            .with_session_credentials(HashMap::from([(
+                ACCESS_CODE_KEY.to_owned(),
+                "ABCD2345EFGH".to_owned(),
+            )]));
+        client.verify_connection().await.unwrap();
+        client.list_files(FileLocation::Root).await.unwrap();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"book").unwrap();
+        let result = client
+            .upload(
+                file.path().to_path_buf(),
+                "book.epub".to_owned(),
+                FileLocation::Root,
+                UploadOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.entry.path, "/books/book.epub");
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|request| {
+            request
+                .headers
+                .iter()
+                .any(|(name, value)| name == "X-Transfer-Token" && value == "ABCD2345EFGH")
+        }));
+        assert_eq!(requests[2].path, "/api/upload");
+        assert!(
+            requests[2].headers.iter().any(|(name, value)| {
+                name == "X-Transfer-Path" && value == "Ym9va3MvYm9vay5lcHVi"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn justread_upload_forwards_http_byte_progress() {
+        let transport = MockTransport::new(vec![response(200, r#"{"ok":true}"#)]);
+        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone());
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"book").unwrap();
+        let progress = Arc::new(RecordingProgress::default());
+
+        client
+            .upload(
+                file.path().to_path_buf(),
+                "book.epub".to_owned(),
+                FileLocation::Root,
+                UploadOptions::default(),
+                Some(progress.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*transport.upload_progress_observers.lock().unwrap(), [true]);
+        assert_eq!(*progress.0.lock().unwrap(), [(2, 4)]);
+    }
+
+    #[tokio::test]
+    async fn justread_download_exchanges_authenticated_ticket_for_streaming_request() {
+        let transport = MockTransport::new(vec![response(
+            200,
+            r#"{"url":"/api/download-file?t=ABCD2345EFGH","name":"book.epub"}"#,
+        )]);
+        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
+            .with_session_credentials(HashMap::from([(
+                ACCESS_CODE_KEY.to_owned(),
+                "SESSIONCODE12".to_owned(),
+            )]));
+        client
+            .download("/books/book.epub".to_owned(), PathBuf::from("unused"))
+            .await
+            .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests[0].path, "/api/download-ticket");
+        assert!(
+            requests[0]
+                .headers
+                .iter()
+                .any(|(name, value)| { name == "X-Transfer-Token" && value == "SESSIONCODE12" })
+        );
+        let downloads = transport.downloads.lock().unwrap();
+        assert_eq!(downloads[0].path, "/api/download-file");
+        assert_eq!(
+            downloads[0].query,
+            [("t".to_owned(), "ABCD2345EFGH".to_owned())]
         );
     }
 }

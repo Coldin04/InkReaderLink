@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     path::PathBuf,
     sync::{Arc, OnceLock},
@@ -7,12 +7,12 @@ use std::{
 };
 
 use inkreaderlink_core::{
-    Capability, ConflictPolicy, DeviceClient, DeviceConnectionField, DeviceConnectionFieldKind,
-    DeviceConstraints, DeviceFileFormats, DeviceInfoField, DeviceKind, DeviceProfile,
-    DeviceResolution, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog, FontFamily,
-    FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor, SettingKind,
-    SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
-    WallpaperUploadResult, WifiCredential, WifiNetwork, built_in_definitions,
+    Capability, ConflictPolicy, ConnectionFieldRetention, DeviceClient, DeviceConnectionField,
+    DeviceConnectionFieldKind, DeviceConstraints, DeviceFileFormats, DeviceInfoField,
+    DeviceProfile, DeviceResolution, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog,
+    FontFamily, FontFile, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingDescriptor,
+    SettingKind, SettingValue, SettingsSnapshot, UploadOptions, UploadProgressSink, UploadResult,
+    WallpaperUploadResult, WifiCredential, WifiNetwork, built_in_definitions, route_device,
 };
 
 #[derive(Clone, Debug, uniffi::Enum)]
@@ -405,6 +405,10 @@ pub enum SdkOperationError {
     InvalidArgument { detail: String },
     #[error("{detail}")]
     Unsupported { detail: String },
+    #[error("credential required: {key}")]
+    CredentialRequired { key: String },
+    #[error("credential rejected: {key}")]
+    CredentialRejected { key: String },
     #[error("device unreachable")]
     Unreachable,
     #[error("operation timed out")]
@@ -428,6 +432,8 @@ impl From<SdkError> for SdkOperationError {
         match error {
             SdkError::InvalidArgument(detail) => Self::InvalidArgument { detail },
             SdkError::Unsupported(detail) => Self::Unsupported { detail },
+            SdkError::CredentialRequired { key } => Self::CredentialRequired { key },
+            SdkError::CredentialRejected { key } => Self::CredentialRejected { key },
             SdkError::Unreachable => Self::Unreachable,
             SdkError::Timeout => Self::Timeout,
             SdkError::Conflict(detail) => Self::Conflict { detail },
@@ -477,6 +483,7 @@ impl From<DeviceResolution> for SdkDeviceResolution {
 #[derive(Clone, Debug, uniffi::Enum)]
 pub enum SdkConnectionFieldKind {
     Text,
+    Secret,
     Address,
     Choice { options: Vec<String> },
     Toggle,
@@ -486,9 +493,25 @@ impl From<DeviceConnectionFieldKind> for SdkConnectionFieldKind {
     fn from(kind: DeviceConnectionFieldKind) -> Self {
         match kind {
             DeviceConnectionFieldKind::Text => Self::Text,
+            DeviceConnectionFieldKind::Secret => Self::Secret,
             DeviceConnectionFieldKind::Address => Self::Address,
             DeviceConnectionFieldKind::Choice { options } => Self::Choice { options },
             DeviceConnectionFieldKind::Toggle => Self::Toggle,
+        }
+    }
+}
+
+#[derive(Clone, Debug, uniffi::Enum)]
+pub enum SdkConnectionFieldRetention {
+    AppManaged,
+    Session,
+}
+
+impl From<ConnectionFieldRetention> for SdkConnectionFieldRetention {
+    fn from(retention: ConnectionFieldRetention) -> Self {
+        match retention {
+            ConnectionFieldRetention::AppManaged => Self::AppManaged,
+            ConnectionFieldRetention::Session => Self::Session,
         }
     }
 }
@@ -499,14 +522,28 @@ pub struct SdkConnectionField {
     pub label: String,
     pub kind: SdkConnectionFieldKind,
     pub required: bool,
+    pub retention: SdkConnectionFieldRetention,
 }
 
-#[derive(Clone, Debug, uniffi::Enum)]
+#[derive(Clone, uniffi::Enum)]
 pub enum SdkConnectionValue {
     Text { value: String },
+    Secret { value: String },
     Address { value: String },
     Choice { index: u32 },
     Toggle { value: bool },
+}
+
+impl std::fmt::Debug for SdkConnectionValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text { value } => formatter.debug_tuple("Text").field(value).finish(),
+            Self::Secret { .. } => formatter.write_str("Secret(<redacted>)"),
+            Self::Address { value } => formatter.debug_tuple("Address").field(value).finish(),
+            Self::Choice { index } => formatter.debug_tuple("Choice").field(index).finish(),
+            Self::Toggle { value } => formatter.debug_tuple("Toggle").field(value).finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -522,6 +559,7 @@ impl From<DeviceConnectionField> for SdkConnectionField {
             label: field.label,
             kind: field.kind.into(),
             required: field.required,
+            retention: field.retention.into(),
         }
     }
 }
@@ -668,10 +706,15 @@ where
         .map_err(Into::into)
 }
 
-fn resolve_connection_address(
+struct ResolvedConnection {
+    address: String,
+    session_credentials: HashMap<String, String>,
+}
+
+fn resolve_connection_parameters(
     device_type: &str,
     parameters: Vec<SdkConnectionParameter>,
-) -> Result<String, SdkOperationError> {
+) -> Result<ResolvedConnection, SdkOperationError> {
     let definition = built_in_definitions()
         .into_iter()
         .find(|definition| definition.device_type == device_type)
@@ -691,6 +734,7 @@ fn resolve_connection_address(
 
     let mut seen = HashSet::new();
     let mut address = None;
+    let mut session_credentials = HashMap::new();
     for parameter in parameters {
         if !seen.insert(parameter.key.clone()) {
             return Err(SdkOperationError::InvalidArgument {
@@ -707,6 +751,12 @@ fn resolve_connection_address(
         let valid = match (&field.kind, &parameter.value) {
             (DeviceConnectionFieldKind::Text, SdkConnectionValue::Text { .. })
             | (DeviceConnectionFieldKind::Toggle, SdkConnectionValue::Toggle { .. }) => true,
+            (DeviceConnectionFieldKind::Secret, SdkConnectionValue::Secret { value }) => {
+                if !value.is_empty() {
+                    session_credentials.insert(parameter.key.clone(), value.clone());
+                }
+                true
+            }
             (DeviceConnectionFieldKind::Address, SdkConnectionValue::Address { value }) => {
                 address = Some(value.clone());
                 true
@@ -736,11 +786,15 @@ fn resolve_connection_address(
         }
     }
 
-    address
+    let address = address
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| SdkOperationError::InvalidArgument {
             detail: "device address is required".to_owned(),
-        })
+        })?;
+    Ok(ResolvedConnection {
+        address,
+        session_credentials,
+    })
 }
 
 #[uniffi::export]
@@ -757,17 +811,9 @@ impl SdkDeviceClient {
         base_url: String,
         timeout_ms: u64,
     ) -> Result<Arc<Self>, SdkOperationError> {
-        let kind = match device_type.as_str() {
-            "read-pico" => DeviceKind::ReadPico,
-            "crosspoint" => DeviceKind::CrossPoint,
-            "whiteos" => DeviceKind::WhiteOs,
-            "kiikoread" => DeviceKind::KiikoRead,
-            _ => {
-                return Err(SdkOperationError::Unsupported {
-                    detail: format!("unknown device type: {device_type}"),
-                });
-            }
-        };
+        let kind = route_device(&device_type).ok_or_else(|| SdkOperationError::Unsupported {
+            detail: format!("unknown device type: {device_type}"),
+        })?;
         let inner =
             DeviceClient::connect(kind, &base_url, Duration::from_millis(timeout_ms.max(1)))
                 .map_err(SdkOperationError::from)?;
@@ -808,8 +854,23 @@ impl SdkDeviceClient {
         parameters: Vec<SdkConnectionParameter>,
         timeout_ms: u64,
     ) -> Result<Arc<Self>, SdkOperationError> {
-        let address = resolve_connection_address(&device_type, parameters)?;
-        Self::connect_and_verify(device_type, address, timeout_ms).await
+        let resolved = resolve_connection_parameters(&device_type, parameters)?;
+        let kind = route_device(&device_type).ok_or_else(|| SdkOperationError::Unsupported {
+            detail: format!("unknown device type: {device_type}"),
+        })?;
+        let inner = DeviceClient::connect(
+            kind,
+            &resolved.address,
+            Duration::from_millis(timeout_ms.max(1)),
+        )
+        .map_err(SdkOperationError::from)?
+        .with_session_credentials(resolved.session_credentials);
+        let inner = Arc::new(inner);
+        let client = Arc::new(Self {
+            inner: Arc::clone(&inner),
+        });
+        run_on_sdk_runtime(async move { inner.verify_connection().await }).await?;
+        Ok(client)
     }
 
     #[must_use]
@@ -1272,13 +1333,7 @@ impl BooksendSdk {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
     pub fn baseline_profile(&self, device_type: String) -> Option<SdkDeviceProfile> {
-        let kind = match device_type.as_str() {
-            "read-pico" => DeviceKind::ReadPico,
-            "crosspoint" => DeviceKind::CrossPoint,
-            "whiteos" => DeviceKind::WhiteOs,
-            "kiikoread" => DeviceKind::KiikoRead,
-            _ => return None,
-        };
+        let kind = route_device(&device_type)?;
         Some(DeviceProfile::baseline(kind).into())
     }
 }
@@ -1296,5 +1351,51 @@ mod tests {
 
         assert_eq!(profile.identity.device_type, "read-pico");
         assert!(profile.capabilities.contains(&"files.upload".to_owned()));
+    }
+
+    #[test]
+    fn justread_declares_session_secret_and_allows_probe_without_it() {
+        let sdk = BooksendSdk::new();
+        let definition = sdk
+            .supported_devices()
+            .into_iter()
+            .find(|item| item.device_type == "justread")
+            .unwrap();
+        assert_eq!(definition.display_name, "JustRead(实验性)");
+        let access_code = definition
+            .connection_fields
+            .iter()
+            .find(|field| field.key == "access_code")
+            .unwrap();
+        assert!(matches!(access_code.kind, SdkConnectionFieldKind::Secret));
+        assert!(matches!(
+            access_code.retention,
+            SdkConnectionFieldRetention::Session
+        ));
+        assert!(!access_code.required);
+
+        let address = SdkConnectionParameter {
+            key: "address".to_owned(),
+            value: SdkConnectionValue::Address {
+                value: "192.168.4.1".to_owned(),
+            },
+        };
+        let probe = resolve_connection_parameters("justread", vec![address.clone()]).unwrap();
+        assert_eq!(probe.address, "192.168.4.1");
+        assert!(probe.session_credentials.is_empty());
+        let linked = resolve_connection_parameters(
+            "justread",
+            vec![
+                address,
+                SdkConnectionParameter {
+                    key: "access_code".to_owned(),
+                    value: SdkConnectionValue::Secret {
+                        value: "ABCD2345EFGH".to_owned(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(linked.session_credentials["access_code"], "ABCD2345EFGH");
     }
 }

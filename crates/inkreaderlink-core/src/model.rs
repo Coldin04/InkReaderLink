@@ -34,18 +34,26 @@ pub struct FileDownload {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceConnectionFieldKind {
     Text,
+    Secret,
     Address,
     Choice { options: Vec<String> },
     Toggle,
 }
 
-/// A device-specific value the app should collect before saving a connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionFieldRetention {
+    AppManaged,
+    Session,
+}
+
+/// A device-specific value the caller may need to collect for a connection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceConnectionField {
     pub key: String,
     pub label: String,
     pub kind: DeviceConnectionFieldKind,
     pub required: bool,
+    pub retention: ConnectionFieldRetention,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,6 +232,8 @@ pub trait UploadProgressSink: Send + Sync {
 pub enum SdkError {
     InvalidArgument(String),
     Unsupported(String),
+    CredentialRequired { key: String },
+    CredentialRejected { key: String },
     Unreachable,
     Timeout,
     Conflict(String),
@@ -239,6 +249,8 @@ impl std::fmt::Display for SdkError {
         match self {
             Self::InvalidArgument(message) => write!(formatter, "invalid argument: {message}"),
             Self::Unsupported(message) => write!(formatter, "unsupported: {message}"),
+            Self::CredentialRequired { key } => write!(formatter, "credential required: {key}"),
+            Self::CredentialRejected { key } => write!(formatter, "credential rejected: {key}"),
             Self::Unreachable => formatter.write_str("device unreachable"),
             Self::Timeout => formatter.write_str("operation timed out"),
             Self::Conflict(message) => write!(formatter, "conflict: {message}"),

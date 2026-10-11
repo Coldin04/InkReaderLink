@@ -14,10 +14,11 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 - [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) （在 [CrossMux](https://github.com/0x1abin/crossmux) 上测试通过)
 - [KiikoRead 固件](https://github.com/wegooo-cell/read-pico-reader)
 - WhiteOS
+- JustRead（实验性）
 
 ## 当前目标
 
-- 支持 Read Pico、CrossPoint、WhiteOS 和 KiikoRead 固件。
+- 支持 Read Pico、CrossPoint、WhiteOS、KiikoRead 和 JustRead 固件。
 - 支持横向增加其他设备和固件。
 - 新增设备且不增加通用能力时，不要求上层修改调用代码。
 - WebDAV、mDNS 等高阶能力暂不作为首版目标。
@@ -31,6 +32,7 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 │   │   └── src/
 │   │       ├── adapters/
 │   │       │   ├── crosspoint.rs  # CrossPoint 协议 adapter
+│   │       │   ├── justread.rs    # JustRead 文件传输 adapter
 │   │       │   ├── read_pico.rs   # Read Pico 协议 adapter
 │   │       │   ├── whiteos.rs     # WhiteOS HTTP 文件 API adapter
 │   │       │   └── mod.rs
@@ -63,11 +65,11 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 ## 开发状态
 
-当前提供 Read Pico、CrossPoint、WhiteOS 与 KiikoRead 固件的文件管理；Wi-Fi、字体、
+当前提供 Read Pico、CrossPoint、WhiteOS、KiikoRead 与 JustRead 固件的文件管理；Wi-Fi、字体、
 OPDS 服务器、壁纸和动态设置等能力按固件声明开放，具体见 [SDK 接口文档](docs/sdk/interface.md)。
 
 Android/iOS 上层通过 `BooksendSdk.supportedDevices()` 查询支持的固件名称及连接表单字段，
-按 SDK 声明动态渲染文本框、地址框、下拉列表或开关。新增设备时，应在 `DeviceDefinition`
+按 SDK 声明动态渲染文本框、密码框、地址框、下拉列表或开关。新增设备时，应在 `DeviceDefinition`
 中同时补充显示名称与必填连接字段，并更新 [SDK 接口文档](docs/sdk/interface.md)。
 
 `DeviceProfile.file_formats.font_upload_extensions` 返回字体管理接口接受的格式，

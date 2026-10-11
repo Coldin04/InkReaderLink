@@ -1,6 +1,14 @@
 //! Internal HTTP and WebSocket transport.
 
-use std::{fmt, path::PathBuf, sync::Arc, time::Duration, time::Instant};
+use std::{
+    fmt,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -8,8 +16,7 @@ use reqwest::{Body, Client, Method, multipart};
 use tokio::{
     fs::File,
     io::AsyncWriteExt,
-    sync::Notify,
-    time::{Instant as TokioInstant, sleep_until, timeout},
+    time::{Instant as TokioInstant, MissedTickBehavior, interval, timeout},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::io::ReaderStream;
@@ -18,36 +25,94 @@ use url::Url;
 use crate::SdkError;
 use crate::UploadProgressSink;
 
-const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+const UPLOAD_TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const UPLOAD_RESPONSE_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
+const UPLOAD_WATCHDOG_INTERVAL: Duration = Duration::from_secs(1);
+const UPLOAD_PROGRESS_MIN_BYTES: u64 = 256 * 1024;
+const UPLOAD_PROGRESS_MAX_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 struct UploadActivity {
-    last_byte_at: std::sync::Mutex<Instant>,
-    changed: Notify,
+    bytes_read: AtomicU64,
+    body_complete: AtomicBool,
 }
 
 impl UploadActivity {
     fn new() -> Self {
         Self {
-            last_byte_at: std::sync::Mutex::new(Instant::now()),
-            changed: Notify::new(),
+            bytes_read: AtomicU64::new(0),
+            body_complete: AtomicBool::new(false),
         }
     }
 
-    fn record(&self) {
-        *self
-            .last_byte_at
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
-        self.changed.notify_one();
+    fn record(&self, bytes_read: u64, total_bytes: u64) {
+        self.bytes_read.store(bytes_read, Ordering::Relaxed);
+        if bytes_read >= total_bytes {
+            self.body_complete.store(true, Ordering::Release);
+        }
+    }
+}
+
+struct UploadWatchdog {
+    last_bytes_read: u64,
+    last_progress_at: TokioInstant,
+}
+
+impl UploadWatchdog {
+    fn new(now: TokioInstant) -> Self {
+        Self {
+            last_bytes_read: 0,
+            last_progress_at: now,
+        }
     }
 
-    fn last_byte_at(&self) -> Instant {
-        *self
-            .last_byte_at
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn expired(&mut self, activity: &UploadActivity, now: TokioInstant) -> bool {
+        let bytes_read = activity.bytes_read.load(Ordering::Relaxed);
+        if bytes_read > self.last_bytes_read {
+            self.last_bytes_read = bytes_read;
+            self.last_progress_at = now;
+        }
+        let idle_limit = if activity.body_complete.load(Ordering::Acquire) {
+            UPLOAD_RESPONSE_IDLE_TIMEOUT
+        } else {
+            UPLOAD_TRANSFER_IDLE_TIMEOUT
+        };
+        now.duration_since(self.last_progress_at) >= idle_limit
     }
+}
+
+fn upload_body(
+    file: File,
+    size: u64,
+    progress: Option<Arc<dyn UploadProgressSink>>,
+    activity: Option<Arc<UploadActivity>>,
+) -> Body {
+    if progress.is_none() && activity.is_none() {
+        return Body::wrap_stream(ReaderStream::new(file));
+    }
+    let mut read = 0_u64;
+    let mut last_reported = 0_u64;
+    let mut last_report_at = Instant::now();
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Ok(bytes) = &chunk {
+            read = read.saturating_add(bytes.len() as u64).min(size);
+            if let Some(activity) = &activity {
+                activity.record(read, size);
+            }
+            if let Some(progress) = &progress {
+                if read == size
+                    || read.saturating_sub(last_reported) >= UPLOAD_PROGRESS_MIN_BYTES
+                    || last_report_at.elapsed() >= UPLOAD_PROGRESS_MAX_INTERVAL
+                {
+                    progress.report(read, size);
+                    last_reported = read;
+                    last_report_at = Instant::now();
+                }
+            }
+        }
+        chunk
+    });
+    Body::wrap_stream(stream)
 }
 
 async fn send_with_upload_idle_timeout(
@@ -56,15 +121,15 @@ async fn send_with_upload_idle_timeout(
 ) -> Result<reqwest::Response, SdkError> {
     let send = builder.send();
     tokio::pin!(send);
+    let mut watchdog = interval(UPLOAD_WATCHDOG_INTERVAL);
+    watchdog.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut watchdog_state = UploadWatchdog::new(TokioInstant::now());
     loop {
-        let deadline = TokioInstant::from_std(activity.last_byte_at() + UPLOAD_IDLE_TIMEOUT);
-        let sleep = sleep_until(deadline);
-        tokio::pin!(sleep);
         tokio::select! {
+            biased;
             result = &mut send => return result.map_err(map_reqwest_error),
-            () = activity.changed.notified() => {},
-            () = &mut sleep => {
-                if activity.last_byte_at().elapsed() >= UPLOAD_IDLE_TIMEOUT {
+            _ = watchdog.tick() => {
+                if watchdog_state.expired(&activity, TokioInstant::now()) {
                     return Err(SdkError::Timeout);
                 }
             }
@@ -98,7 +163,7 @@ pub enum HttpBody {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HttpRequest {
     pub method: HttpMethod,
     pub path: String,
@@ -106,6 +171,34 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     pub body: HttpBody,
     pub response_limit: Option<usize>,
+}
+
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headers = self
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str(),
+                    if name.eq_ignore_ascii_case("X-Transfer-Token") {
+                        "<redacted>"
+                    } else {
+                        value.as_str()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        formatter
+            .debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("query", &self.query)
+            .field("headers", &headers)
+            .field("body", &self.body)
+            .field("response_limit", &self.response_limit)
+            .finish()
+    }
 }
 
 impl HttpRequest {
@@ -282,30 +375,7 @@ impl ReqwestTransport {
             HttpBody::RawFile { path, content_type } => {
                 let file = File::open(&path).await.map_err(map_file_error)?;
                 let size = file.metadata().await.map_err(map_file_error)?.len();
-                let stream = ReaderStream::new(file);
-                let body = if let Some(progress) = progress {
-                    let mut sent = 0_u64;
-                    let activity = activity.clone();
-                    Body::wrap_stream(stream.map(move |chunk| {
-                        if let Ok(bytes) = &chunk {
-                            sent = sent.saturating_add(bytes.len() as u64);
-                            if let Some(activity) = &activity {
-                                activity.record();
-                            }
-                            progress.report(sent.min(size), size);
-                        }
-                        chunk
-                    }))
-                } else if let Some(activity) = activity {
-                    Body::wrap_stream(stream.map(move |chunk| {
-                        if chunk.is_ok() {
-                            activity.record();
-                        }
-                        chunk
-                    }))
-                } else {
-                    Body::wrap_stream(stream)
-                };
+                let body = upload_body(file, size, progress, activity);
                 let mut builder = builder
                     .header(reqwest::header::CONTENT_LENGTH, size)
                     .body(body);
@@ -323,9 +393,8 @@ impl ReqwestTransport {
             } => {
                 let file = File::open(&path).await.map_err(map_file_error)?;
                 let size = file.metadata().await.map_err(map_file_error)?.len();
-                let stream = ReaderStream::new(file);
-                let mut part = multipart::Part::stream_with_length(Body::wrap_stream(stream), size)
-                    .file_name(file_name);
+                let body = upload_body(file, size, progress, activity);
+                let mut part = multipart::Part::stream_with_length(body, size).file_name(file_name);
                 if let Some(content_type) = content_type {
                     part = part.mime_str(&content_type).map_err(|error| {
                         SdkError::InvalidArgument(format!("invalid content type: {error}"))
@@ -404,7 +473,7 @@ impl Transport for ReqwestTransport {
 
     async fn download(&self, request: HttpRequest, destination: PathBuf) -> Result<(), SdkError> {
         let response = self
-            .request_builder(request, None, false, None)
+            .request_builder(request, None, true, None)
             .await?
             .send()
             .await
@@ -624,5 +693,22 @@ mod tests {
         );
         assert_eq!(parse_progress("DONE"), None);
         assert_eq!(parse_progress("PROGRESS:bad:123456"), None);
+    }
+
+    #[test]
+    fn upload_watchdog_uses_progress_and_allows_device_response_time() {
+        let start = TokioInstant::now();
+        let activity = UploadActivity::new();
+        let mut watchdog = UploadWatchdog::new(start);
+
+        assert!(!watchdog.expired(&activity, start + Duration::from_secs(59)));
+        activity.record(1, 4);
+        assert!(!watchdog.expired(&activity, start + Duration::from_secs(60)));
+        assert!(watchdog.expired(&activity, start + Duration::from_secs(121)));
+
+        activity.record(4, 4);
+        assert!(!watchdog.expired(&activity, start + Duration::from_secs(122)));
+        assert!(!watchdog.expired(&activity, start + Duration::from_secs(301)));
+        assert!(watchdog.expired(&activity, start + Duration::from_secs(302)));
     }
 }
