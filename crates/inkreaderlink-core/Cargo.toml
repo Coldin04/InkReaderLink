@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+base64 = "0.22.1"
 futures-util = "0.3.31"
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -1,8 +1,8 @@
 //! Built-in device declarations and configurable device definitions.
 
 use crate::{
-    Capability, DeviceConnectionField, DeviceConnectionFieldKind, DeviceConstraints,
-    DeviceFileFormats, DeviceKind, DeviceResolution, capability::ids,
+    Capability, ConnectionFieldRetention, DeviceConnectionField, DeviceConnectionFieldKind,
+    DeviceConstraints, DeviceFileFormats, DeviceKind, DeviceResolution, capability::ids,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +78,7 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
         DeviceKind::CrossPoint => crosspoint_definition(),
         DeviceKind::WhiteOs => whiteos_definition(),
         DeviceKind::KiikoRead => kiikoread_definition(),
+        DeviceKind::JustRead => justread_definition(),
     }
 }
 
@@ -88,6 +89,7 @@ pub fn built_in_definitions() -> Vec<DeviceDefinition> {
         crosspoint_definition(),
         whiteos_definition(),
         kiikoread_definition(),
+        justread_definition(),
     ]
 }
 
@@ -110,6 +112,7 @@ pub fn read_pico_definition() -> DeviceDefinition {
         label: "设备地址".to_owned(),
         kind: DeviceConnectionFieldKind::Address,
         required: true,
+        retention: ConnectionFieldRetention::AppManaged,
     })
     .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
@@ -140,6 +143,7 @@ pub fn crosspoint_definition() -> DeviceDefinition {
         label: "设备地址".to_owned(),
         kind: DeviceConnectionFieldKind::Address,
         required: true,
+        retention: ConnectionFieldRetention::AppManaged,
     })
     .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
@@ -187,6 +191,7 @@ pub fn whiteos_definition() -> DeviceDefinition {
         label: "设备地址".to_owned(),
         kind: DeviceConnectionFieldKind::Address,
         required: true,
+        retention: ConnectionFieldRetention::AppManaged,
     })
     .with_capability(ids::FILE_LIST)
     .with_capability(ids::FILE_DIRECTORY_LIST)
@@ -219,6 +224,7 @@ pub fn kiikoread_definition() -> DeviceDefinition {
         label: "设备地址".to_owned(),
         kind: DeviceConnectionFieldKind::Address,
         required: true,
+        retention: ConnectionFieldRetention::AppManaged,
     })
     .with_capability(ids::DEVICE_INFO)
     .with_capability(ids::FILE_LIST)
@@ -233,6 +239,42 @@ pub fn kiikoread_definition() -> DeviceDefinition {
     .with_capability(ids::WALLPAPERS_MANAGE)
     .with_capability(ids::WALLPAPERS_DELETE);
     definition.constraints.can_list_directories = true;
+    definition
+}
+
+#[must_use]
+pub fn justread_definition() -> DeviceDefinition {
+    let mut definition = DeviceDefinition::upload_only(
+        "justread",
+        DeviceFileFormats {
+            accepts_any_upload_format: true,
+            upload_extensions: Vec::new(),
+            font_upload_extensions: Vec::new(),
+            wallpaper_upload_extensions: Vec::new(),
+            readable_extensions: extensions(&["epub", "txt"]),
+        },
+    )
+    .with_display_name("JustRead(实验性)")
+    .with_connection_field(DeviceConnectionField {
+        key: "address".to_owned(),
+        label: "设备地址".to_owned(),
+        kind: DeviceConnectionFieldKind::Address,
+        required: true,
+        retention: ConnectionFieldRetention::AppManaged,
+    })
+    .with_connection_field(DeviceConnectionField {
+        key: "access_code".to_owned(),
+        label: "设备访问码".to_owned(),
+        kind: DeviceConnectionFieldKind::Secret,
+        required: false,
+        retention: ConnectionFieldRetention::Session,
+    })
+    .with_capability(ids::FILE_LIST)
+    .with_capability(ids::FILE_DIRECTORY_LIST)
+    .with_capability(ids::UPLOAD_DIRECTORY_TARGET)
+    .with_capability(ids::FILE_DOWNLOAD);
+    definition.constraints.can_list_directories = true;
+    definition.constraints.can_choose_upload_directory = true;
     definition
 }
 

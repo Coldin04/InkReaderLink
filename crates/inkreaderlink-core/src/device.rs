@@ -7,6 +7,7 @@ pub const READ_PICO_DEVICE_TYPE: &str = "read-pico";
 pub const CROSSPOINT_DEVICE_TYPE: &str = "crosspoint";
 pub const WHITEOS_DEVICE_TYPE: &str = "whiteos";
 pub const KIIKOREAD_DEVICE_TYPE: &str = "kiikoread";
+pub const JUSTREAD_DEVICE_TYPE: &str = "justread";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceIdentity {
@@ -22,6 +23,7 @@ pub enum DeviceKind {
     CrossPoint,
     WhiteOs,
     KiikoRead,
+    JustRead,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +42,7 @@ pub fn route_device(device_type: &str) -> Option<DeviceKind> {
         CROSSPOINT_DEVICE_TYPE => Some(DeviceKind::CrossPoint),
         WHITEOS_DEVICE_TYPE => Some(DeviceKind::WhiteOs),
         KIIKOREAD_DEVICE_TYPE => Some(DeviceKind::KiikoRead),
+        JUSTREAD_DEVICE_TYPE => Some(DeviceKind::JustRead),
         _ => None,
     }
 }
