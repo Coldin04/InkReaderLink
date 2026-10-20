@@ -18,8 +18,8 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 - [if-ink OS](https://github.com/yiifanrecyclable/if-ink-OS)
 - [WhiteOS](https://446599.github.io/whiteos/)
 - [JustRead](https://flasher.smn.icu/)
-- Pico Page
-- PageRest
+- [Pico Page](https://picopage.wulu.zone/install/)
+- [PageRest](https://pico.gofree.kdns.fr/)
 
 ## 当前目标
 
