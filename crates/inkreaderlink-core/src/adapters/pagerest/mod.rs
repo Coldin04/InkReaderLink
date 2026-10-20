@@ -1,12 +1,12 @@
-//! `PageRest` API adapter. Read Pico's book and Wi-Fi endpoints are shared;
-//! `PageRest`'s per-kind preflight, media roots, and upload reconciliation live here.
+//! `PageRest` API adapter. Its book listing, Wi-Fi policy, per-kind preflight,
+//! media roots, and upload reconciliation use PageRest's own wire contract.
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceInfoField, FileEntry, FileKind, SdkError,
+    DeviceInfoField, FileEntry, FileKind, FileLocation, SdkError, WifiNetwork,
     transport::{HttpBody, HttpMethod, HttpRequest, HttpResponse},
 };
 
@@ -87,6 +87,33 @@ struct UploadCheck {
 }
 
 #[derive(Deserialize)]
+struct PageRestBookPage {
+    page: usize,
+    total: usize,
+    pages: usize,
+    items: Vec<PageRestBook>,
+}
+
+#[derive(Deserialize)]
+struct PageRestBook {
+    name: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+struct PageRestWifiInfo {
+    wifi_configured: bool,
+    #[serde(default)]
+    wifi_ssid: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PageRestWifiCredential<'a> {
+    ssid: &'a str,
+    password: &'a str,
+}
+
+#[derive(Deserialize)]
 struct FileSystemResponse {
     entries: Vec<FileSystemEntry>,
 }
@@ -111,7 +138,9 @@ pub struct PageRestAdapter;
 impl PageRestAdapter {
     #[must_use]
     pub fn book_list_request(page: usize) -> HttpRequest {
-        crate::adapters::read_pico::ReadPicoAdapter::list_request(page)
+        let mut request = HttpRequest::new(HttpMethod::Get, "/books");
+        request.query.push(("page".to_owned(), page.to_string()));
+        request
     }
 
     /// # Errors
@@ -120,7 +149,36 @@ impl PageRestAdapter {
         location: &crate::FileLocation,
         body: &str,
     ) -> Result<super::AdapterFilePage, SdkError> {
-        crate::adapters::read_pico::ReadPicoAdapter::parse_file_page(location, body)
+        if !matches!(location, FileLocation::Root) {
+            return Err(SdkError::Unsupported(
+                "PageRest does not support directory selection".to_owned(),
+            ));
+        }
+        let response: PageRestBookPage = serde_json::from_str(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid PageRest book list: {error}"))
+        })?;
+        let entries = response
+            .items
+            .into_iter()
+            .map(|book| FileEntry {
+                path: format!("/{}", book.name),
+                name: book.name,
+                size: book.size,
+                kind: FileKind::Book,
+            })
+            .collect();
+        Ok(super::AdapterFilePage {
+            entries,
+            page: response.page,
+            total: response.total,
+            pages: response.pages,
+        })
+    }
+
+    pub(super) fn book_name_from_path(path: &str) -> Result<&str, SdkError> {
+        let name = path.strip_prefix('/').unwrap_or(path);
+        crate::validation::validate_file_name(name)?;
+        Ok(name)
     }
 
     #[must_use]
@@ -276,18 +334,38 @@ impl PageRestAdapter {
     /// # Errors
     /// Returns a remote failure when the saved network response cannot be parsed.
     pub fn parse_wifi_info(body: &str) -> Result<Vec<crate::WifiNetwork>, SdkError> {
-        crate::adapters::read_pico::ReadPicoAdapter::parse_wifi_info(body)
+        let info: PageRestWifiInfo = serde_json::from_str(body).map_err(|error| {
+            SdkError::RemoteFailure(format!("invalid PageRest Wi-Fi info: {error}"))
+        })?;
+        Ok(info
+            .wifi_ssid
+            .filter(|ssid| info.wifi_configured && !ssid.is_empty())
+            .into_iter()
+            .map(|ssid| WifiNetwork {
+                index: None,
+                ssid,
+                has_password: info.wifi_configured,
+                is_last_connected: true,
+            })
+            .collect())
     }
 
     /// # Errors
     /// Returns an argument error if the Wi-Fi credentials cannot be serialized.
     pub fn wifi_save_request(credential: &crate::WifiCredential) -> Result<HttpRequest, SdkError> {
-        crate::adapters::read_pico::ReadPicoAdapter::wifi_save_request(credential)
+        let body = serde_json::to_vec(&PageRestWifiCredential {
+            ssid: &credential.ssid,
+            password: credential.password.as_deref().unwrap_or_default(),
+        })
+        .map_err(|error| SdkError::InvalidArgument(format!("invalid Wi-Fi data: {error}")))?;
+        let mut request = HttpRequest::new(HttpMethod::Post, "/wifi");
+        request.body = HttpBody::Json(body);
+        Ok(request)
     }
 
     #[must_use]
     pub fn wifi_delete_request() -> HttpRequest {
-        crate::adapters::read_pico::ReadPicoAdapter::wifi_delete_request()
+        HttpRequest::new(HttpMethod::Delete, "/wifi")
     }
 
     /// # Errors

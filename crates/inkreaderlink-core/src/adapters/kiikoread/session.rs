@@ -179,6 +179,7 @@ impl DeviceAdapter for Session {
             overwrite,
             apply_to_lock_screen,
             size,
+            progress: _,
         } = upload;
         if size > 20 * 1024 * 1024 {
             return Err(SdkError::InvalidArgument(

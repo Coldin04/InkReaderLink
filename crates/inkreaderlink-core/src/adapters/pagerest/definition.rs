@@ -33,6 +33,7 @@ pub fn pagerest_definition() -> DeviceDefinition {
     .with_capability(ids::FONTS_UPLOAD_PROGRESS)
     .with_capability(ids::FONTS_DELETE)
     .with_capability(ids::WALLPAPERS_UPLOAD)
+    .with_capability(ids::WALLPAPERS_UPLOAD_PROGRESS)
     .with_capability(ids::WALLPAPERS_MANAGE)
     .with_capability(ids::WALLPAPERS_DELETE)
     .with_capability(ids::WIFI_LIST)

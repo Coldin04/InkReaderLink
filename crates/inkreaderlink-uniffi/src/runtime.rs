@@ -1,6 +1,15 @@
 use crate::SdkOperationError;
 use inkreaderlink_core::SdkError;
 use std::{future::Future, sync::OnceLock};
+use tokio::task::AbortHandle;
+
+struct AbortOnDrop(AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 fn sdk_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
@@ -16,11 +25,14 @@ where
     T: Send + 'static,
     F: Future<Output = Result<T, SdkError>> + Send + 'static,
 {
-    sdk_runtime()
-        .spawn(future)
+    let task = sdk_runtime().spawn(future);
+    let abort_on_drop = AbortOnDrop(task.abort_handle());
+    let result = task
         .await
         .map_err(|error| SdkOperationError::RemoteFailure {
             detail: format!("SDK task failed: {error}"),
         })?
-        .map_err(Into::into)
+        .map_err(Into::into);
+    drop(abort_on_drop);
+    result
 }

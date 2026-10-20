@@ -390,7 +390,33 @@ impl DeviceClient {
         overwrite: bool,
         apply_to_lock_screen: bool,
     ) -> Result<WallpaperUploadResult, SdkError> {
+        self.upload_wallpaper_with_progress(
+            local_path,
+            file_name,
+            overwrite,
+            apply_to_lock_screen,
+            None,
+        )
+        .await
+    }
+
+    /// Uploads an image and reports bytes supplied to the request body when supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, conflict, or protocol errors.
+    pub async fn upload_wallpaper_with_progress(
+        &self,
+        local_path: PathBuf,
+        file_name: String,
+        overwrite: bool,
+        apply_to_lock_screen: bool,
+        progress: Option<Arc<dyn UploadProgressSink>>,
+    ) -> Result<WallpaperUploadResult, SdkError> {
         self.require(ids::WALLPAPERS_UPLOAD)?;
+        if progress.is_some() {
+            self.require(ids::WALLPAPERS_UPLOAD_PROGRESS)?;
+        }
         validate_file_name(&file_name)?;
         validate_extension(
             &file_name,
@@ -406,6 +432,7 @@ impl DeviceClient {
                 overwrite,
                 apply_to_lock_screen,
                 size,
+                progress,
             })
             .await
     }

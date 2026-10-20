@@ -52,8 +52,8 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 if-ink OS（`if-ink-os`）使用独立 adapter 和 profile；`/info`、目录列表、字体、壁纸和 Wi-Fi 的
 基础请求及响应解析复用 KiikoRead 协议，任意目标路径上传、Markdown 导入、文件变更和 Wi-Fi
 删除使用 if-ink OS 专属请求。
-PageRest（`pagerest`）使用独立 adapter；图书分页响应解析和 Wi-Fi 凭据 JSON 复用 Read Pico，
-其余存储信息、上传预检查、原始文件上传、字体/图片列表与删除及上传结果核对使用 PageRest 接口。
+PageRest（`pagerest`）是独立固件类型，不能因网页标题出现“小纸 Pico”或“Read Pico”而识别为 Read Pico。
+它使用独立 adapter 和 PageRest 自己的图书分页、Wi-Fi 请求与响应解析；不使用 Pico Page 的访问码或 token。
 连接只需普通设备地址，不使用 URL 访问码或 `X-Pico-Token`；也不复用 Pico Page 的会话处理。
 
 `SdkConnectionField` 以 `key` 标识值，包含显示标签 `label`、是否在初次提交时必填的
@@ -124,6 +124,7 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | `upload.backup-replace` | 可用 `.back` 备份替换 |
 | `upload.websocket` | 可用 WebSocket 上传 |
 | `fonts.upload.progress` | SDK 可回传写入字体上传请求体的字节数 |
+| `wallpapers.upload.progress` | SDK 可回传写入图片上传请求体的字节数 |
 | `wifi.list` | 可读取固件暴露的已保存 Wi-Fi 信息 |
 | `wifi.save` | 可保存或更新 Wi-Fi |
 | `wifi.delete` | 可删除已保存 Wi-Fi |
@@ -166,16 +167,20 @@ Pico Page 提供一个上传接口；SDK 仅按定义中声明的扩展名接受
 `Origin` 与访问码页面 `Referer`。流式上传前通过 CRC-32 请求校验文件。非 200 响应保留设备
 返回的 HTTP 状态和正文，不推断冲突、格式或存储错误。设备未声明文件列表、覆盖或目标目录能力。
 
-PageRest 从普通设备地址读取 `/info`；图书列表和删除沿用 Read Pico 的 `/books` 协议及分页模型。
+PageRest 从普通设备地址读取 `/info`；图书列表使用自己的 `/books` 协议和分页响应模型。
 上传前读取 `/info` 的可用状态、单文件限制和剩余空间，再向 `/upload-check?kind=...&name=...&size=...`
 发送空 POST。若同名文件存在且调用方选择覆盖，SDK 在后续原始 `PUT` 中附加 `overwrite=1`；正文使用流式文件体，
 不使用 multipart。图书、字体和图片分别上传到 `/upload`、`/fonts`、`/images`；错误响应的设备正文会保留。
 字体和图片管理读取 `/fs?root=fonts|images` 并过滤目录项，删除分别调用 `/fonts?name=...` 和
-`/images?name=...`。PageRest 的字体接口按单文件管理，现有 `FontCatalog` 模型以文件名作为族名，
+`/images?name=...`。书籍、字体和图片都按原始文件流顺序上传，不使用 multipart，SDK 分别提供请求体字节进度回调。
+PageRest 的字体接口按单文件管理，现有 `FontCatalog` 模型以文件名作为族名，
 并在该设备上将 `max_families=0` 表示固件未报告族数量上限。上传连接中断时，SDK 对照预检查返回的序号和
 `/info.last_upload` 的序号、文件名、总字节数及错误状态；只有全部匹配时才显示设备错误，否则返回“结果未确认”。
-Wi-Fi 的信息解析、保存请求和遗忘请求复用 Read Pico；保存/遗忘仅允许 `mode=ap`，不会自动切换或断开网络。
+Wi-Fi 信息、保存和遗忘请求使用 PageRest 自己的 `/info` 与 `/wifi` 解析和序列化；保存/遗忘仅允许
+`mode=ap`，不会自动切换或断开网络。
 壁纸上传只存入图片库，`applyToLockScreen=true` 对 PageRest 返回 `Unsupported`。
+PageRest 图片能力映射到 SDK 通用壁纸模型；HTTP 请求体进度代表本地文件已交给网络请求的字节数，设备确认保存仍以最终响应为准。
+取消 UniFFI 异步调用会中止对应 SDK 任务和正在进行的请求；若取消发生在设备已提交而响应尚未返回时，结果需从对应内容列表确认。
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
 `upload_extensions` 过滤。`readable_extensions` 表示设备原生阅读格式。

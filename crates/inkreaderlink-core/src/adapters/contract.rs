@@ -43,6 +43,7 @@ pub(crate) struct WallpaperUpload {
     pub overwrite: bool,
     pub apply_to_lock_screen: bool,
     pub size: u64,
+    pub progress: Option<Arc<dyn UploadProgressSink>>,
 }
 #[async_trait]
 pub(crate) trait DeviceAdapter: Send + Sync {

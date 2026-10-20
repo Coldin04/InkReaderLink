@@ -11,7 +11,6 @@ use async_trait::async_trait;
 
 use super::PageRestAdapter;
 use super::PageRestUploadKind;
-use crate::adapters::read_pico::session::read_pico_name;
 pub(crate) struct Session {
     transport: SharedTransport,
 }
@@ -194,11 +193,14 @@ impl DeviceAdapter for Session {
         Ok(result)
     }
     fn validate_delete(&self, path: &str) -> Result<(), SdkError> {
-        read_pico_name(path).map(|_| ())
+        PageRestAdapter::book_name_from_path(path).map(|_| ())
     }
     async fn delete(&self, path: &str) -> Result<(), SdkError> {
         self.execute_success(
-            PageRestAdapter::delete_request(PageRestUploadKind::Book, read_pico_name(path)?),
+            PageRestAdapter::delete_request(
+                PageRestUploadKind::Book,
+                PageRestAdapter::book_name_from_path(path)?,
+            ),
             "delete",
         )
         .await
@@ -259,6 +261,7 @@ impl DeviceAdapter for Session {
             overwrite,
             apply_to_lock_screen,
             size,
+            progress,
         } = upload;
         if apply_to_lock_screen {
             return Err(SdkError::Unsupported(
@@ -281,7 +284,7 @@ impl DeviceAdapter for Session {
                 location: FileLocation::Root,
                 options,
                 size,
-                progress: None,
+                progress,
             },
             PageRestUploadKind::Image,
         )

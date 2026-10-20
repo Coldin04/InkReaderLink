@@ -28,6 +28,7 @@ pub mod ids {
     pub const UPLOAD_BACKUP_REPLACE: &str = "upload.backup-replace";
     pub const UPLOAD_WEBSOCKET: &str = "upload.websocket";
     pub const FONTS_UPLOAD_PROGRESS: &str = "fonts.upload.progress";
+    pub const WALLPAPERS_UPLOAD_PROGRESS: &str = "wallpapers.upload.progress";
     pub const WIFI_LIST: &str = "wifi.list";
     pub const WIFI_SAVE: &str = "wifi.save";
     pub const WIFI_DELETE: &str = "wifi.delete";

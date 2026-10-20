@@ -1,7 +1,10 @@
 use std::{path::PathBuf, sync::Arc};
 
-use crate::runtime::run_on_sdk_runtime;
-use crate::{SdkDeviceClient, SdkFileEntry, SdkOperationError, SdkWallpaperUploadResult};
+use crate::{
+    SdkDeviceClient, SdkFileEntry, SdkOperationError, SdkUploadProgressObserver,
+    SdkWallpaperUploadResult,
+};
+use crate::{progress::FfiProgressSink, runtime::run_on_sdk_runtime};
 #[uniffi::export]
 impl SdkDeviceClient {
     /// Lists images managed as wallpapers by the selected firmware.
@@ -40,6 +43,37 @@ impl SdkDeviceClient {
                     file_name,
                     overwrite,
                     apply_to_lock_screen,
+                )
+                .await
+                .map(Into::into)
+        })
+        .await
+    }
+
+    /// Uploads a wallpaper and reports bytes supplied to the request body.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, capability, file, transport, conflict, or protocol errors.
+    pub async fn upload_wallpaper_with_progress(
+        &self,
+        local_path: String,
+        file_name: String,
+        overwrite: bool,
+        apply_to_lock_screen: bool,
+        progress_observer: Arc<dyn SdkUploadProgressObserver>,
+    ) -> Result<SdkWallpaperUploadResult, SdkOperationError> {
+        let inner = Arc::clone(&self.inner);
+        run_on_sdk_runtime(async move {
+            inner
+                .upload_wallpaper_with_progress(
+                    PathBuf::from(local_path),
+                    file_name,
+                    overwrite,
+                    apply_to_lock_screen,
+                    Some(Arc::new(FfiProgressSink {
+                        observer: progress_observer,
+                    })),
                 )
                 .await
                 .map(Into::into)

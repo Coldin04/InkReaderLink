@@ -33,7 +33,7 @@
 - `CrossPointAdapter`：CrossPoint HTTP、WebSocket 和文件管理。
 - `IfInkOsAdapter`：if-ink OS 的目录上传、Markdown 导入、文件操作和 Wi-Fi 删除；共用 KiikoRead 的基础 HTTP 协议。
 - `ReadPicoAdapter`：Read Pico HTTP、图书管理和部分成功语义。
-- `PageRestAdapter`：普通设备地址连接，不使用访问码或 Pico Page token；复用 Read Pico 的图书分页解析和 Wi-Fi 请求/解析，独立处理存储信息、上传预检查、原始文件上传、字体/图片目录与上传结果核对。
+- `PageRestAdapter`：普通设备地址连接，不使用访问码或 Pico Page token；按 PageRest 自己的 `/books` 与 `/info`、`/wifi` 协议处理分页、Wi-Fi、存储信息、上传预检查、原始文件上传、字体/图片目录与上传结果核对。网页标题中的“小纸 Pico”或“Read Pico”是界面文字，不是固件类型标识。
 - `WhiteOsAdapter`：WhiteOS `/api` 文件列表、上传、下载和文件管理接口。
 - `PicoPageAdapter`：Pico Page 路径访问码校验、会话 token 提取和文件上传；支持格式由设备定义声明。
 - CrossPoint 文件替换可采用：旧文件改名为 `<name>.back`，上传新文件并核对成功后删除 `.back`；失败时尝试恢复，恢复失败必须返回明确错误。
