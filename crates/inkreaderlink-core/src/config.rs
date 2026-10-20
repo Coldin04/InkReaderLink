@@ -88,6 +88,7 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
 #[must_use]
 pub fn built_in_definitions() -> Vec<DeviceDefinition> {
     vec![
+        justread_definition(),
         read_pico_definition(),
         crosspoint_definition(),
         crossmux_definition(),
@@ -95,7 +96,6 @@ pub fn built_in_definitions() -> Vec<DeviceDefinition> {
         if_ink_os_definition(),
         whiteos_definition(),
         kiikoread_definition(),
-        justread_definition(),
         pico_page_definition(),
         pagerest_definition(),
     ]

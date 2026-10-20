@@ -143,21 +143,21 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint | CrossMux / RickyOS | WhiteOS | KiikoRead 固件 | if-ink OS | JustRead | PageRest |
+| 字段 | JustRead | Read Pico | CrossPoint | CrossMux / RickyOS | WhiteOS | KiikoRead 固件 | if-ink OS | PageRest |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `can_list_directories` | false | true | true | true | true | true | true | false |
-| `can_choose_upload_directory` | false | true | true | true | false | true | true | false |
+| `can_list_directories` | true | false | true | true | true | true | true | false |
+| `can_choose_upload_directory` | true | false | true | true | false | true | true | false |
 
 固件格式声明：
 
 | 设备 | 普通文件上传接受 | 字体上传接受 | 壁纸上传接受 | 设备原生可读 |
 |---|---|---|---|---|
+| JustRead | 任意文件 | — | — | EPUB、TXT |
 | Read Pico | EPUB、TXT | `.ttf` | — | EPUB、TXT |
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
 | WhiteOS | API 接受任意扩展名 | — | — | TXT、EPUB、PDF |
 | KiikoRead 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 | if-ink OS | EPUB、TXT、Markdown | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT、Markdown |
-| JustRead | 任意文件 | — | — | EPUB、TXT |
 | Pico Page | EPUB、TXT、TTF、OTF、PNG、JPEG | — | — | EPUB、TXT |
 | PageRest | EPUB、TXT | `.ttf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
 

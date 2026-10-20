@@ -10,6 +10,7 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 ## 已适配固件
 
+- [JustRead](https://flasher.smn.icu/)
 - [Read Pico 官方固件](https://github.com/MindReset/read_pico_firmware)
 - [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)
 - [CrossMux](https://github.com/0x1abin/crossmux)
@@ -17,13 +18,12 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 - [KiikoRead](https://github.com/wegooo-cell/read-pico-reader)
 - [if-ink OS](https://github.com/yiifanrecyclable/if-ink-OS)
 - [WhiteOS](https://446599.github.io/whiteos/)
-- [JustRead](https://flasher.smn.icu/)
 - [Pico Page](https://picopage.wulu.zone/install/)
 - [PageRest](https://pico.gofree.kdns.fr/)
 
 ## 当前目标
 
-- 支持 Read Pico、CrossPoint、CrossMux、RickyOS、WhiteOS、KiikoRead、if-ink OS、JustRead、Pico Page 和 PageRest 固件。
+- 支持 JustRead、Read Pico、CrossPoint、CrossMux、RickyOS、WhiteOS、KiikoRead、if-ink OS、Pico Page 和 PageRest 固件。
 - 支持横向增加其他设备和固件。
 - 新增设备且不增加通用能力时，不要求上层修改调用代码。
 - WebDAV、mDNS 等高阶能力暂不作为首版目标。
@@ -37,12 +37,12 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 │   │   └── src/
 │   │       ├── adapters/
 │   │       │   ├── contract.rs    # 统一操作接口与类型化参数
+│   │       │   ├── justread/      # JustRead 会话认证与文件传输
 │   │       │   ├── crosspoint/    # 请求、会话、备份恢复、WebSocket 与设置
 │   │       │   ├── crossmux/      # 共用 CrossPoint 协议的设备定义
 │   │       │   ├── rickyos/       # 共用 CrossPoint 协议的设备定义
 │   │       │   ├── if_ink_os/     # if-ink OS 专属流程与显式协议复用
 │   │       │   ├── kiikoread/     # KiikoRead 请求、分页与上传流程
-│   │       │   ├── justread/      # JustRead 会话认证与文件传输
 │   │       │   ├── pagerest/      # PageRest 预检查、媒体与 Wi-Fi 管理
 │   │       │   ├── pico_page/     # Pico Page 地址认证与上传握手
 │   │       │   ├── read_pico/     # Read Pico 请求、分页与部分成功语义
@@ -85,7 +85,7 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 ## 开发状态
 
-当前提供 Read Pico、CrossPoint、WhiteOS、KiikoRead、if-ink OS 与 JustRead 固件的文件管理，以及
+当前提供 JustRead、Read Pico、CrossPoint、WhiteOS、KiikoRead 与 if-ink OS 固件的文件管理，以及
 Pico Page 的文件上传和 PageRest 的图书、字体、壁纸与 Wi-Fi 管理；Wi-Fi、字体、OPDS 服务器、壁纸和动态设置等能力按固件声明开放，具体见
 [SDK 接口文档](docs/sdk/interface.md)。
 
