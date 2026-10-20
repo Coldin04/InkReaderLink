@@ -1,5 +1,6 @@
 pub mod crossmux;
 pub mod crosspoint;
+pub mod foliobook;
 pub mod if_ink_os;
 pub mod justread;
 pub mod kiikoread;
@@ -34,5 +35,6 @@ pub(crate) fn create(
         DeviceKind::JustRead => Box::new(justread::session::Session::new(transport)),
         DeviceKind::PicoPage => Box::new(pico_page::session::Session::new(transport)),
         DeviceKind::PageRest => Box::new(pagerest::session::Session::new(transport)),
+        DeviceKind::FolioBook => Box::new(foliobook::session::Session::new(transport)),
     }
 }
