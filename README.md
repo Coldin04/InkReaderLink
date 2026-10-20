@@ -99,6 +99,8 @@ Android/iOS 上层通过 `BooksendSdk.supportedDevices()` 查询支持的固件�
 
 ## SDK 引用指南
 
+Release 构建的体积优化配置、绑定生成顺序与测量结果见[构建与产物体积](docs/sdk/building.md)。
+
 Android App 使用 `com.cold04:inkreaderlink-uniffi`，依赖版本同时表达 SDK 的来源：
 
 以下版本号均为格式示例，不代表当前版本或已发布版本；使用时应替换为实际的 SDK 版本和 commit SHA。
