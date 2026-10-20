@@ -467,3 +467,17 @@ mod tests {
         assert_eq!(request.path, "/api/opds/delete");
     }
 }
+
+pub(crate) mod session;
+
+pub mod settings;
+
+pub(crate) mod definition;
+
+mod websocket;
+
+#[cfg(test)]
+mod session_tests;
+
+#[cfg(test)]
+mod websocket_tests;

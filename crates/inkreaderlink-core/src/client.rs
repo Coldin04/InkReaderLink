@@ -8,38 +8,31 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
-    DeviceKind, DeviceProfile, FileDownload, FileEntry, FileKind, FileLocation, FontCatalog,
-    OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot, UploadOptions,
-    UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential, WifiNetwork,
-    adapters::{
-        crosspoint::CrossPointAdapter,
-        justread::{ACCESS_CODE_KEY, JustReadAdapter},
-        kiikoread::KiikoReadAdapter,
-        read_pico::ReadPicoAdapter,
-        whiteos::WhiteOsAdapter,
-    },
+    DeviceDefinition, DeviceKind, DeviceProfile, FileDownload, FileEntry, FileLocation,
+    FontCatalog, OpdsCredential, OpdsServer, SdkError, SettingChange, SettingsSnapshot,
+    UploadOptions, UploadProgressSink, UploadResult, WallpaperUploadResult, WifiCredential,
+    WifiNetwork,
+    adapters::{self, DeviceAdapter, FileUpload, FontUpload, WallpaperUpload},
     capability::ids,
     model::{ConflictPolicy, SettingsValidationPolicy},
-    settings::{encode_changes, parse_settings},
-    transport::{HttpResponse, ReqwestTransport, SharedTransport, WebSocketUpload},
+    transport::{ReqwestTransport, SharedTransport},
+    validation::{
+        batch_operation_error, validate_batch_paths, validate_file_name, validate_remote_path,
+    },
 };
 
 pub struct DeviceClient {
-    kind: DeviceKind,
     profile: DeviceProfile,
-    transport: SharedTransport,
+    adapter: Box<dyn DeviceAdapter>,
     mutation: Mutex<()>,
     settings_validation_policy: SettingsValidationPolicy,
-    session_credentials: HashMap<String, String>,
 }
 
 impl std::fmt::Debug for DeviceClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DeviceClient")
-            .field("kind", &self.kind)
             .field("profile", &self.profile)
-            .field("session_credential_count", &self.session_credentials.len())
             .finish_non_exhaustive()
     }
 }
@@ -52,35 +45,41 @@ impl DeviceClient {
     /// Returns an error when the device URL is invalid.
     pub fn connect(kind: DeviceKind, base_url: &str, timeout: Duration) -> Result<Self, SdkError> {
         let transport = Arc::new(ReqwestTransport::new(base_url, timeout)?);
-        Ok(Self::with_transport(kind, transport))
+        let mut adapter = adapters::create(kind, transport);
+        adapter.configure_address(base_url)?;
+        Ok(Self {
+            profile: DeviceProfile::baseline(kind),
+            adapter,
+            mutation: Mutex::new(()),
+            settings_validation_policy: SettingsValidationPolicy::Permissive,
+        })
     }
 
     #[must_use]
     pub fn with_transport(kind: DeviceKind, transport: SharedTransport) -> Self {
         Self {
-            kind,
             profile: DeviceProfile::baseline(kind),
-            transport,
+            adapter: adapters::create(kind, transport),
             mutation: Mutex::new(()),
             settings_validation_policy: SettingsValidationPolicy::Permissive,
-            session_credentials: HashMap::new(),
         }
+    }
+
+    /// Uses a distinct device profile while retaining the selected protocol adapter.
+    #[must_use]
+    pub fn with_device_definition(mut self, definition: DeviceDefinition) -> Self {
+        self.profile = DeviceProfile::from_definition(definition);
+        self
     }
 
     /// Transfers caller-supplied session secrets into this client only.
     #[must_use]
     pub fn with_session_credentials(mut self, credentials: HashMap<String, String>) -> Self {
-        self.session_credentials = credentials;
+        self.adapter.set_session_credentials(credentials);
         self
     }
 
-    fn justread_access_code(&self) -> Option<&str> {
-        self.session_credentials
-            .get(ACCESS_CODE_KEY)
-            .map(String::as_str)
-    }
-
-    /// Selects validation strictness for `CrossPoint` dynamic settings.
+    /// Selects validation strictness for dynamic settings.
     #[must_use]
     pub fn with_settings_validation_policy(mut self, policy: SettingsValidationPolicy) -> Self {
         self.settings_validation_policy = policy;
@@ -92,38 +91,13 @@ impl DeviceClient {
         &self.profile
     }
 
-    /// Verifies the HTTP origin using the selected device's information endpoint.
+    /// Verifies the connection through the selected adapter.
     ///
     /// # Errors
     ///
     /// Returns transport, HTTP, or device response errors.
     pub async fn verify_connection(&self) -> Result<(), SdkError> {
-        let request = match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
-            DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
-            DeviceKind::WhiteOs => WhiteOsAdapter::list_request(&FileLocation::Root),
-            DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
-            DeviceKind::JustRead => {
-                JustReadAdapter::list_request(&FileLocation::Root, self.justread_access_code())?
-            }
-        };
-        let response = self.transport.execute(request).await?;
-        if self.kind == DeviceKind::JustRead {
-            ensure_justread_success(
-                &response,
-                "verify device connection",
-                self.justread_access_code(),
-            )?;
-            return JustReadAdapter::validate_listing(&response.body);
-        }
-        ensure_success(&response, "verify device connection")?;
-        match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::validate_info(&response.body),
-            DeviceKind::CrossPoint => CrossPointAdapter::validate_status(&response.body),
-            DeviceKind::WhiteOs => WhiteOsAdapter::validate_file_list(&response.body),
-            DeviceKind::KiikoRead => KiikoReadAdapter::validate_info(&response.body),
-            DeviceKind::JustRead => unreachable!("JustRead verified above"),
-        }
+        self.adapter.verify_connection().await
     }
 
     /// Fetches the currently available information from the connected device.
@@ -134,30 +108,7 @@ impl DeviceClient {
     /// or a transport, HTTP, or invalid-response error.
     pub async fn device_info(&self) -> Result<Vec<crate::DeviceInfoField>, SdkError> {
         self.require(ids::DEVICE_INFO)?;
-        let request = match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::info_request(),
-            DeviceKind::CrossPoint => CrossPointAdapter::status_request(),
-            DeviceKind::WhiteOs => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not expose device info".to_owned(),
-                ));
-            }
-            DeviceKind::KiikoRead => KiikoReadAdapter::info_request(),
-            DeviceKind::JustRead => {
-                return Err(SdkError::Unsupported(
-                    "JustRead does not expose device info".to_owned(),
-                ));
-            }
-        };
-        let response = self.transport.execute(request).await?;
-        ensure_success(&response, "get device info")?;
-        match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::parse_info(&response.body),
-            DeviceKind::CrossPoint => CrossPointAdapter::parse_status(&response.body),
-            DeviceKind::WhiteOs => unreachable!("WhiteOS has no device info capability"),
-            DeviceKind::KiikoRead => KiikoReadAdapter::parse_info(&response.body),
-            DeviceKind::JustRead => unreachable!("JustRead has no device info capability"),
-        }
+        self.adapter.device_info().await
     }
 
     /// Lists files at a supported location.
@@ -170,13 +121,7 @@ impl DeviceClient {
         if matches!(location, FileLocation::Directory(_)) {
             self.require(ids::FILE_DIRECTORY_LIST)?;
         }
-        match self.kind {
-            DeviceKind::ReadPico => self.list_read_pico(location).await,
-            DeviceKind::CrossPoint => self.list_crosspoint(&location).await,
-            DeviceKind::WhiteOs => self.list_whiteos(&location).await,
-            DeviceKind::KiikoRead => self.list_kiikoread(&location).await,
-            DeviceKind::JustRead => self.list_justread(&location).await,
-        }
+        self.adapter.list_files(&location).await
     }
 
     /// Uploads a local file without buffering it in memory.
@@ -196,64 +141,28 @@ impl DeviceClient {
         validate_file_name(&file_name)?;
         self.validate_upload_format(&file_name)?;
         self.validate_location(&location)?;
-        let size = tokio::fs::metadata(&local_path)
-            .await
-            .map_err(|error| {
-                SdkError::InvalidArgument(format!("cannot read upload file: {error}"))
-            })?
-            .len();
-        if size == 0 {
-            return Err(SdkError::InvalidArgument(
-                "upload file must not be empty".to_owned(),
-            ));
+        match options.conflict_policy {
+            ConflictPolicy::Fail => {}
+            ConflictPolicy::OverwriteWhenSupported => {
+                self.require(ids::UPLOAD_EXPLICIT_OVERWRITE)?;
+            }
+            ConflictPolicy::ReplaceWithBackup => self.require(ids::UPLOAD_BACKUP_REPLACE)?,
         }
-        if self.kind == DeviceKind::JustRead && size > 0x7fff_0000 {
-            return Err(SdkError::InvalidArgument(
-                "JustRead upload exceeds the firmware size limit".to_owned(),
-            ));
+        if options.prefer_websocket {
+            self.require(ids::UPLOAD_WEBSOCKET)?;
         }
-
+        let size = file_size(&local_path, "upload file").await?;
         let _guard = self.mutation.lock().await;
-        let used_websocket = match self.kind {
-            DeviceKind::ReadPico => {
-                self.upload_read_pico(local_path, file_name.clone(), options)
-                    .await?;
-                false
-            }
-            DeviceKind::CrossPoint => {
-                self.upload_crosspoint(&local_path, &file_name, &location, &options, progress)
-                    .await?
-            }
-            DeviceKind::KiikoRead => {
-                self.upload_kiikoread(local_path, file_name.clone(), options)
-                    .await?;
-                false
-            }
-            DeviceKind::WhiteOs => {
-                self.upload_whiteos(local_path, &file_name, &location, options)
-                    .await?;
-                false
-            }
-            DeviceKind::JustRead => {
-                self.upload_justread(local_path, &file_name, &location, options, progress)
-                    .await?;
-                false
-            }
-        };
-        let path = if self.kind == DeviceKind::JustRead {
-            JustReadAdapter::upload_path(&location, &file_name)?
-        } else {
-            join_location(&location, &file_name)
-        };
-        Ok(UploadResult {
-            entry: FileEntry {
-                name: file_name.clone(),
-                path,
+        self.adapter
+            .upload(FileUpload {
+                local_path,
+                file_name,
+                location,
+                options,
                 size,
-                kind: infer_file_kind(&file_name),
-            },
-            used_websocket,
-        })
+                progress,
+            })
+            .await
     }
 
     /// Deletes a remote file or empty directory.
@@ -265,23 +174,12 @@ impl DeviceClient {
         self.require(ids::FILE_DELETE)?;
         validate_remote_path(&path)?;
         let _guard = self.mutation.lock().await;
-        let request = match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::delete_request(read_pico_name(&path)?),
-            DeviceKind::CrossPoint => CrossPointAdapter::delete_request(&path),
-            DeviceKind::KiikoRead => {
-                let relative = path.strip_prefix('/').unwrap_or(&path);
-                KiikoReadAdapter::delete_path_request(relative)?
-            }
-            DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&path),
-            DeviceKind::JustRead => unreachable!("JustRead has no delete capability"),
-        };
-        self.execute_success(request, "delete").await
+        self.adapter.delete(&path).await
     }
 
     /// Deletes multiple remote files or empty directories.
     ///
-    /// `CrossPoint` uses its multi-path endpoint. Read Pico executes its single-item
-    /// endpoint serially and stops on the first failure.
+    /// The adapter selects native batch deletion or serial execution.
     ///
     /// # Errors
     ///
@@ -290,48 +188,11 @@ impl DeviceClient {
     pub async fn delete_files(&self, paths: Vec<String>) -> Result<(), SdkError> {
         self.require(ids::FILE_DELETE)?;
         validate_batch_paths(&paths)?;
-
-        if self.kind == DeviceKind::CrossPoint {
-            let request = CrossPointAdapter::delete_files_request(&paths)?;
-            let _guard = self.mutation.lock().await;
-            return self.execute_success(request, "delete files").await;
-        }
-
-        let names = paths
-            .iter()
-            .map(|path| {
-                if self.kind == DeviceKind::ReadPico {
-                    read_pico_name(path).map(str::to_owned)
-                } else if self.kind == DeviceKind::WhiteOs {
-                    Ok(path.clone())
-                } else {
-                    Ok(path.strip_prefix('/').unwrap_or(path).to_owned())
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let _guard = self.mutation.lock().await;
-        for (index, (path, name)) in paths.iter().zip(names).enumerate() {
-            let request = match self.kind {
-                DeviceKind::ReadPico => ReadPicoAdapter::delete_request(&name),
-                DeviceKind::KiikoRead => KiikoReadAdapter::delete_path_request(&name)?,
-                DeviceKind::WhiteOs => WhiteOsAdapter::delete_request(&name),
-                DeviceKind::CrossPoint => unreachable!("CrossPoint exits through batch endpoint"),
-                DeviceKind::JustRead => unreachable!("JustRead has no delete capability"),
-            };
-            if let Err(error) = self.execute_success(request, "delete").await {
-                return Err(batch_operation_error(
-                    "delete",
-                    index,
-                    paths.len(),
-                    path,
-                    &error,
-                ));
-            }
-        }
-        Ok(())
+        self.adapter.delete_files(&paths).await
     }
 
-    /// Downloads a remote `CrossPoint` file to a local path using a temporary file.
+    /// Streams a remote file to a local path.
     ///
     /// # Errors
     ///
@@ -339,20 +200,8 @@ impl DeviceClient {
     pub async fn download(&self, path: String, destination: PathBuf) -> Result<(), SdkError> {
         self.require(ids::FILE_DOWNLOAD)?;
         validate_remote_path(&path)?;
-        if self.kind == DeviceKind::JustRead {
-            return self.download_justread(&path, destination).await;
-        }
-        let request = match self.kind {
-            DeviceKind::CrossPoint => CrossPointAdapter::download_request(&path),
-            DeviceKind::WhiteOs => WhiteOsAdapter::download_request(&path),
-            DeviceKind::JustRead => unreachable!("JustRead download handled above"),
-            _ => {
-                return Err(SdkError::Unsupported(
-                    "device does not support downloads".to_owned(),
-                ));
-            }
-        };
-        self.transport.download(request, destination).await
+
+        self.adapter.download(&path, destination).await
     }
 
     /// Downloads multiple remote files to their corresponding local destinations.
@@ -420,19 +269,7 @@ impl DeviceClient {
         validate_remote_path(&parent)?;
         validate_file_name(&name)?;
         let _guard = self.mutation.lock().await;
-        let request = match self.kind {
-            DeviceKind::CrossPoint => CrossPointAdapter::mkdir_request(&parent, &name),
-            DeviceKind::WhiteOs => WhiteOsAdapter::create_directory_request(&join_location(
-                &FileLocation::Directory(parent),
-                &name,
-            )),
-            _ => {
-                return Err(SdkError::Unsupported(
-                    "device does not support directory creation".to_owned(),
-                ));
-            }
-        };
-        self.execute_success(request, "create directory").await
+        self.adapter.create_directory(&parent, &name).await
     }
 
     /// Renames a remote file.
@@ -445,25 +282,7 @@ impl DeviceClient {
         validate_remote_path(&path)?;
         validate_file_name(&new_name)?;
         let _guard = self.mutation.lock().await;
-        let request =
-            match self.kind {
-                DeviceKind::CrossPoint => CrossPointAdapter::rename_request(&path, &new_name),
-                DeviceKind::WhiteOs => {
-                    let parent = path.rsplit_once('/').map_or("/", |(parent, _)| {
-                        if parent.is_empty() { "/" } else { parent }
-                    });
-                    WhiteOsAdapter::rename_request(
-                        &path,
-                        &join_location(&FileLocation::Directory(parent.to_owned()), &new_name),
-                    )
-                }
-                _ => {
-                    return Err(SdkError::Unsupported(
-                        "device does not support renaming".to_owned(),
-                    ));
-                }
-            };
-        self.execute_success(request, "rename").await
+        self.adapter.rename(&path, &new_name).await
     }
 
     /// Moves a remote file to an existing directory.
@@ -476,8 +295,7 @@ impl DeviceClient {
         validate_remote_path(&path)?;
         validate_remote_path(&destination)?;
         let _guard = self.mutation.lock().await;
-        self.execute_success(CrossPointAdapter::move_request(&path, &destination), "move")
-            .await
+        self.adapter.move_file(&path, &destination).await
     }
 
     /// Moves multiple files into an existing directory, serially.
@@ -496,8 +314,7 @@ impl DeviceClient {
         validate_remote_path(&destination)?;
         let _guard = self.mutation.lock().await;
         for (index, path) in paths.iter().enumerate() {
-            let request = CrossPointAdapter::move_request(path, &destination);
-            if let Err(error) = self.execute_success(request, "move").await {
+            if let Err(error) = self.adapter.move_file(path, &destination).await {
                 return Err(batch_operation_error(
                     "move",
                     index,
@@ -517,38 +334,8 @@ impl DeviceClient {
     /// Returns transport, protocol, or capability errors.
     pub async fn list_wifi_networks(&self) -> Result<Vec<WifiNetwork>, SdkError> {
         self.require(ids::WIFI_LIST)?;
-        let response = match self.kind {
-            DeviceKind::ReadPico => {
-                self.transport
-                    .execute(ReadPicoAdapter::info_request())
-                    .await?
-            }
-            DeviceKind::CrossPoint => {
-                self.transport
-                    .execute(CrossPointAdapter::wifi_list_request())
-                    .await?
-            }
-            DeviceKind::KiikoRead => {
-                self.transport
-                    .execute(KiikoReadAdapter::info_request())
-                    .await?
-            }
-            DeviceKind::WhiteOs => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not expose Wi-Fi management".to_owned(),
-                ));
-            }
-            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
-        };
-        ensure_success(&response, "list Wi-Fi networks")?;
-        let body = response.text_lossy();
-        match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::parse_wifi_info(&body),
-            DeviceKind::CrossPoint => CrossPointAdapter::parse_wifi_list(&body),
-            DeviceKind::KiikoRead => KiikoReadAdapter::parse_wifi_info(&body),
-            DeviceKind::WhiteOs => unreachable!("WhiteOS has no Wi-Fi capability"),
-            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
-        }
+
+        self.adapter.list_wifi_networks().await
     }
 
     /// Adds or updates a saved Wi-Fi network.
@@ -564,18 +351,7 @@ impl DeviceClient {
             ));
         }
         let _guard = self.mutation.lock().await;
-        let request = match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::wifi_save_request(&credential)?,
-            DeviceKind::CrossPoint => CrossPointAdapter::wifi_save_request(&credential)?,
-            DeviceKind::KiikoRead => KiikoReadAdapter::wifi_save_request(&credential)?,
-            DeviceKind::WhiteOs => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not expose Wi-Fi management".to_owned(),
-                ));
-            }
-            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
-        };
-        self.execute_success(request, "save Wi-Fi network").await
+        self.adapter.save_wifi_network(&credential).await
     }
 
     /// Deletes a saved Wi-Fi network.
@@ -585,49 +361,20 @@ impl DeviceClient {
     /// Returns validation, transport, protocol, or capability errors.
     pub async fn delete_wifi_network(&self, index: Option<u32>) -> Result<(), SdkError> {
         self.require(ids::WIFI_DELETE)?;
+
         let _guard = self.mutation.lock().await;
-        let request = match self.kind {
-            DeviceKind::ReadPico => ReadPicoAdapter::wifi_delete_request(),
-            DeviceKind::CrossPoint => {
-                CrossPointAdapter::wifi_delete_request(index.ok_or_else(|| {
-                    SdkError::InvalidArgument(
-                        "CrossPoint Wi-Fi deletion requires an index".to_owned(),
-                    )
-                })?)?
-            }
-            DeviceKind::KiikoRead => KiikoReadAdapter::wifi_delete_request(),
-            DeviceKind::WhiteOs => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not expose Wi-Fi management".to_owned(),
-                ));
-            }
-            DeviceKind::JustRead => unreachable!("JustRead has no Wi-Fi capability"),
-        };
-        self.execute_success(request, "delete Wi-Fi network").await
+        self.adapter.delete_wifi_network(index).await
     }
 
-    /// Lists wallpaper images stored on the `KiikoRead` firmware's TF card.
+    /// Lists images in the device wallpaper library.
     ///
     /// # Errors
     ///
     /// Returns capability, transport, or protocol errors.
     pub async fn list_wallpapers(&self) -> Result<Vec<FileEntry>, SdkError> {
         self.require(ids::WALLPAPERS_MANAGE)?;
-        let mut page_index = 0;
-        let mut entries = Vec::new();
-        loop {
-            let response = self
-                .transport
-                .execute(KiikoReadAdapter::wallpapers_list_request(page_index))
-                .await?;
-            ensure_kiikoread_success(&response, "list wallpapers")?;
-            let page = KiikoReadAdapter::parse_wallpaper_page(&response.text_lossy())?;
-            entries.extend(page.entries);
-            page_index += 1;
-            if page_index >= page.pages {
-                return Ok(entries);
-            }
-        }
+
+        self.adapter.list_wallpapers().await
     }
 
     /// Uploads an image into the wallpaper library, optionally applying it as
@@ -645,70 +392,22 @@ impl DeviceClient {
     ) -> Result<WallpaperUploadResult, SdkError> {
         self.require(ids::WALLPAPERS_UPLOAD)?;
         validate_file_name(&file_name)?;
-        let extension = Path::new(&file_name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if !self
-            .profile
-            .file_formats
-            .wallpaper_upload_extensions
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(extension))
-        {
-            return Err(SdkError::InvalidArgument(
-                "wallpaper image extension is not supported by this device".to_owned(),
-            ));
-        }
-        let size = tokio::fs::metadata(&local_path)
-            .await
-            .map_err(|error| {
-                SdkError::InvalidArgument(format!("cannot read wallpaper image: {error}"))
-            })?
-            .len();
-        if size == 0 {
-            return Err(SdkError::InvalidArgument(
-                "wallpaper image must not be empty".to_owned(),
-            ));
-        }
-        if size > 20 * 1024 * 1024 {
-            return Err(SdkError::InvalidArgument(
-                "wallpaper image exceeds 20 MiB".to_owned(),
-            ));
-        }
-        if apply_to_lock_screen && size > 2 * 1024 * 1024 {
-            return Err(SdkError::InvalidArgument(
-                "lock-screen wallpaper image exceeds 2 MiB".to_owned(),
-            ));
-        }
-
+        validate_extension(
+            &file_name,
+            &self.profile.file_formats.wallpaper_upload_extensions,
+            "wallpaper image",
+        )?;
+        let size = file_size(&local_path, "wallpaper image").await?;
         let _guard = self.mutation.lock().await;
-        let response = self
-            .transport
-            .execute(KiikoReadAdapter::wallpaper_upload_request(
+        self.adapter
+            .upload_wallpaper(WallpaperUpload {
                 local_path,
-                file_name.clone(),
+                file_name,
                 overwrite,
                 apply_to_lock_screen,
-            ))
-            .await?;
-        let body = response.text_lossy();
-        if apply_to_lock_screen
-            && response.status == 500
-            && body.contains("图片已上传，但设置锁屏壁纸失败")
-        {
-            return Err(SdkError::CommittedWithWarning(body));
-        }
-        ensure_kiikoread_success(&response, "upload wallpaper")?;
-        Ok(WallpaperUploadResult {
-            entry: FileEntry {
-                name: file_name.clone(),
-                path: format!("/pictures/{file_name}"),
                 size,
-                kind: FileKind::Other,
-            },
-            applied_to_lock_screen: apply_to_lock_screen,
-        })
+            })
+            .await
     }
 
     /// Deletes one image from the wallpaper library.
@@ -719,28 +418,13 @@ impl DeviceClient {
     pub async fn delete_wallpaper(&self, file_name: String) -> Result<(), SdkError> {
         self.require(ids::WALLPAPERS_DELETE)?;
         validate_file_name(&file_name)?;
-        if !self
-            .profile
-            .file_formats
-            .wallpaper_upload_extensions
-            .iter()
-            .any(|allowed| {
-                Path::new(&file_name)
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|extension| allowed.eq_ignore_ascii_case(extension))
-            })
-        {
-            return Err(SdkError::InvalidArgument(
-                "file is not a supported wallpaper image".to_owned(),
-            ));
-        }
+        validate_extension(
+            &file_name,
+            &self.profile.file_formats.wallpaper_upload_extensions,
+            "wallpaper image",
+        )?;
         let _guard = self.mutation.lock().await;
-        self.execute_success(
-            KiikoReadAdapter::delete_wallpaper_request(&file_name)?,
-            "delete wallpaper",
-        )
-        .await
+        self.adapter.delete_wallpaper(&file_name).await
     }
 
     /// Lists installed SD-card font families.
@@ -748,15 +432,11 @@ impl DeviceClient {
     /// Returns capability, transport, or protocol errors.
     pub async fn list_fonts(&self) -> Result<FontCatalog, SdkError> {
         self.require(ids::FONTS_LIST)?;
-        let response = self
-            .transport
-            .execute(CrossPointAdapter::fonts_list_request())
-            .await?;
-        ensure_success(&response, "list fonts")?;
-        CrossPointAdapter::parse_font_catalog(&response.text_lossy())
+
+        self.adapter.list_fonts().await
     }
 
-    /// Streams a device-supported font file. Read Pico rejects same-name files by default.
+    /// Streams a device-supported font file without requesting replacement.
     /// # Errors
     /// Returns validation, capability, file, transport, or protocol errors.
     pub async fn upload_font(
@@ -769,7 +449,7 @@ impl DeviceClient {
             .await
     }
 
-    /// Streams a font file, replacing a same-name Read Pico font only when requested.
+    /// Streams a font file with an explicit replacement preference.
     /// # Errors
     /// Returns validation, capability, file, transport, or protocol errors.
     pub async fn upload_font_with_overwrite(
@@ -823,88 +503,23 @@ impl DeviceClient {
             self.require(ids::FONTS_UPLOAD_PROGRESS)?;
         }
         validate_file_name(&file_name)?;
-        let extension = Path::new(&file_name)
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if !self
-            .profile
-            .file_formats
-            .font_upload_extensions
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(extension))
-        {
-            return Err(SdkError::InvalidArgument(
-                "font file extension is not supported by this device".to_owned(),
-            ));
-        }
-        if self.kind == DeviceKind::CrossPoint {
-            validate_font_family(&family)?;
-            if overwrite {
-                return Err(SdkError::Unsupported(
-                    "CrossPoint does not support explicit font overwrite".to_owned(),
-                ));
-            }
-        } else if file_name.len() > 120 {
-            return Err(SdkError::InvalidArgument(
-                "Read Pico font file name exceeds 120 bytes".to_owned(),
-            ));
-        }
-        let size = tokio::fs::metadata(&local_path)
-            .await
-            .map_err(|error| SdkError::InvalidArgument(format!("cannot read font file: {error}")))?
-            .len();
-        if size == 0 {
-            return Err(SdkError::InvalidArgument(
-                "font file must not be empty".to_owned(),
-            ));
-        }
-        if self.kind != DeviceKind::CrossPoint && size > 32 * 1024 * 1024 {
-            return Err(SdkError::InvalidArgument(
-                "font file exceeds 32 MiB".to_owned(),
-            ));
-        }
+        validate_extension(
+            &file_name,
+            &self.profile.file_formats.font_upload_extensions,
+            "font file",
+        )?;
+        let size = file_size(&local_path, "font file").await?;
         let _guard = self.mutation.lock().await;
-        if self.kind == DeviceKind::ReadPico && !overwrite {
-            self.ensure_read_pico_font_is_missing(&file_name).await?;
-        }
-        let request = match self.kind {
-            DeviceKind::ReadPico => {
-                ReadPicoAdapter::font_upload_request(local_path, file_name, overwrite)
-            }
-            DeviceKind::CrossPoint => {
-                CrossPointAdapter::font_upload_request(&family, local_path, file_name)
-            }
-            DeviceKind::KiikoRead => {
-                KiikoReadAdapter::font_upload_request(local_path, file_name, overwrite)
-            }
-            DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
-            DeviceKind::JustRead => unreachable!("JustRead has no font upload capability"),
-        };
-        let response = self
-            .transport
-            .execute_with_upload_progress(request, progress)
-            .await?;
-        if self.kind == DeviceKind::ReadPico && response.status == 409 {
-            let error = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
-            if error
-                .as_ref()
-                .and_then(|value| value.get("conflict"))
-                .and_then(serde_json::Value::as_bool)
-                != Some(true)
-            {
-                return Err(SdkError::Unsupported(
-                    "Read Pico font upload requires a mounted TF card".to_owned(),
-                ));
-            }
-        }
-        match self.kind {
-            DeviceKind::ReadPico => ensure_read_pico_success(&response, "upload font"),
-            DeviceKind::CrossPoint => ensure_success(&response, "upload font"),
-            DeviceKind::WhiteOs => unreachable!("WhiteOS has no font upload capability"),
-            DeviceKind::KiikoRead => ensure_kiikoread_success(&response, "upload font"),
-            DeviceKind::JustRead => unreachable!("JustRead has no font upload capability"),
-        }
+        self.adapter
+            .upload_font(FontUpload {
+                family,
+                local_path,
+                file_name,
+                overwrite,
+                size,
+                progress,
+            })
+            .await
     }
 
     /// Deletes an installed font family.
@@ -912,13 +527,9 @@ impl DeviceClient {
     /// Returns validation, capability, transport, or protocol errors.
     pub async fn delete_font_family(&self, family: String) -> Result<(), SdkError> {
         self.require(ids::FONTS_DELETE)?;
-        validate_font_family(&family)?;
+        validate_file_name(&family)?;
         let _guard = self.mutation.lock().await;
-        self.execute_success(
-            CrossPointAdapter::font_delete_request(&family)?,
-            "delete font family",
-        )
-        .await
+        self.adapter.delete_font_family(&family).await
     }
 
     /// Lists saved OPDS servers without passwords.
@@ -926,12 +537,8 @@ impl DeviceClient {
     /// Returns capability, transport, or protocol errors.
     pub async fn list_opds_servers(&self) -> Result<Vec<OpdsServer>, SdkError> {
         self.require(ids::OPDS_LIST)?;
-        let response = self
-            .transport
-            .execute(CrossPointAdapter::opds_list_request())
-            .await?;
-        ensure_success(&response, "list OPDS servers")?;
-        CrossPointAdapter::parse_opds_list(&response.text_lossy())
+
+        self.adapter.list_opds_servers().await
     }
 
     /// Adds or updates an OPDS server. Omitted password preserves it on update.
@@ -945,11 +552,7 @@ impl DeviceClient {
             ));
         }
         let _guard = self.mutation.lock().await;
-        self.execute_success(
-            CrossPointAdapter::opds_save_request(&credential)?,
-            "save OPDS server",
-        )
-        .await
+        self.adapter.save_opds_server(&credential).await
     }
 
     /// Deletes a saved OPDS server by index.
@@ -957,12 +560,9 @@ impl DeviceClient {
     /// Returns capability, transport, or protocol errors.
     pub async fn delete_opds_server(&self, index: u32) -> Result<(), SdkError> {
         self.require(ids::OPDS_DELETE)?;
+
         let _guard = self.mutation.lock().await;
-        self.execute_success(
-            CrossPointAdapter::opds_delete_request(index)?,
-            "delete OPDS server",
-        )
-        .await
+        self.adapter.delete_opds_server(index).await
     }
 
     /// Returns the current editable settings and metadata needed to render their controls.
@@ -971,7 +571,10 @@ impl DeviceClient {
     /// Returns capability, transport, or malformed response errors.
     pub async fn list_settings(&self) -> Result<SettingsSnapshot, SdkError> {
         self.require(ids::SETTINGS_LIST)?;
-        self.read_settings().await
+
+        self.adapter
+            .list_settings(self.settings_validation_policy)
+            .await
     }
 
     /// Applies a partial update only if the setting descriptors have not changed.
@@ -986,426 +589,9 @@ impl DeviceClient {
         self.require(ids::SETTINGS_UPDATE)?;
         self.require(ids::SETTINGS_LIST)?;
         let _guard = self.mutation.lock().await;
-        let current = self.read_settings().await?;
-        if current != expected {
-            return Err(SdkError::Conflict(
-                "settings changed; reload before saving".to_owned(),
-            ));
-        }
-        let body = encode_changes(&current, &changes)?;
-        self.execute_success(
-            CrossPointAdapter::settings_update_request(body),
-            "update settings",
-        )
-        .await?;
-        self.read_settings().await.map_err(|error| {
-            SdkError::CommittedWithWarning(format!("settings applied but refresh failed: {error}"))
-        })
-    }
-
-    async fn read_settings(&self) -> Result<SettingsSnapshot, SdkError> {
-        let response = self
-            .transport
-            .execute(CrossPointAdapter::settings_list_request())
-            .await?;
-        ensure_success(&response, "list settings")?;
-        parse_settings(&response.body, self.settings_validation_policy)
-    }
-
-    async fn list_read_pico(&self, location: FileLocation) -> Result<Vec<FileEntry>, SdkError> {
-        if !matches!(location, FileLocation::Root) {
-            return Err(SdkError::Unsupported(
-                "Read Pico does not support directory selection".to_owned(),
-            ));
-        }
-        let mut page_index = 0;
-        let mut entries = Vec::new();
-        loop {
-            let response = self
-                .transport
-                .execute(ReadPicoAdapter::list_request(page_index))
-                .await?;
-            ensure_success(&response, "list files")?;
-            let page = ReadPicoAdapter::parse_file_page(&location, &response.text_lossy())?;
-            entries.extend(page.entries);
-            page_index += 1;
-            if page_index >= page.pages {
-                return Ok(entries);
-            }
-        }
-    }
-
-    async fn list_kiikoread(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
-        let mut page_index = 0;
-        let mut entries = Vec::new();
-        loop {
-            let response = self
-                .transport
-                .execute(KiikoReadAdapter::file_list_request(location, page_index))
-                .await?;
-            ensure_kiikoread_success(&response, "list files")?;
-            let page = KiikoReadAdapter::parse_file_page(location, &response.text_lossy())?;
-            entries.extend(page.entries);
-            page_index += 1;
-            if page_index >= page.pages {
-                return Ok(entries);
-            }
-        }
-    }
-
-    async fn list_crosspoint(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
-        let response = self
-            .transport
-            .execute(CrossPointAdapter::list_request(location))
-            .await?;
-        ensure_success(&response, "list files")?;
-        Ok(CrossPointAdapter::parse_file_list(location, &response.text_lossy())?.entries)
-    }
-
-    async fn list_whiteos(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
-        let response = self
-            .transport
-            .execute(WhiteOsAdapter::list_request(location))
-            .await?;
-        ensure_success(&response, "list files")?;
-        Ok(WhiteOsAdapter::parse_file_list(&response.text_lossy())?.entries)
-    }
-
-    async fn list_justread(&self, location: &FileLocation) -> Result<Vec<FileEntry>, SdkError> {
-        let request = JustReadAdapter::list_request(location, self.justread_access_code())?;
-        let response = self.transport.execute(request).await?;
-        ensure_justread_success(&response, "list files", self.justread_access_code())?;
-        JustReadAdapter::parse_listing(location, &response.body)
-    }
-
-    async fn download_justread(&self, path: &str, destination: PathBuf) -> Result<(), SdkError> {
-        let request = JustReadAdapter::download_ticket_request(path, self.justread_access_code())?;
-        let response = self.transport.execute(request).await?;
-        ensure_justread_success(&response, "request download", self.justread_access_code())?;
-        let download = JustReadAdapter::download_request(&response.body)?;
-        self.transport.download(download, destination).await
-    }
-
-    async fn upload_read_pico(
-        &self,
-        local_path: PathBuf,
-        file_name: String,
-        options: UploadOptions,
-    ) -> Result<(), SdkError> {
-        let overwrite = match options.conflict_policy {
-            ConflictPolicy::Fail => false,
-            ConflictPolicy::OverwriteWhenSupported => {
-                self.require(ids::UPLOAD_EXPLICIT_OVERWRITE)?;
-                true
-            }
-            ConflictPolicy::ReplaceWithBackup => {
-                return Err(SdkError::Unsupported(
-                    "Read Pico handles overwrite atomically and does not expose backup replacement"
-                        .to_owned(),
-                ));
-            }
-        };
-        let response = self
-            .transport
-            .execute(ReadPicoAdapter::upload_request(
-                local_path,
-                file_name,
-                overwrite,
-                options.content_type,
-            ))
-            .await?;
-        ensure_read_pico_success(&response, "upload")
-    }
-
-    async fn upload_kiikoread(
-        &self,
-        local_path: PathBuf,
-        file_name: String,
-        options: UploadOptions,
-    ) -> Result<(), SdkError> {
-        let overwrite = match options.conflict_policy {
-            ConflictPolicy::Fail => false,
-            ConflictPolicy::OverwriteWhenSupported => {
-                self.require(ids::UPLOAD_EXPLICIT_OVERWRITE)?;
-                true
-            }
-            ConflictPolicy::ReplaceWithBackup => {
-                return Err(SdkError::Unsupported(
-                    "KiikoRead uses the firmware's explicit overwrite operation".to_owned(),
-                ));
-            }
-        };
-        let response = self
-            .transport
-            .execute(KiikoReadAdapter::book_upload_request(
-                local_path, file_name, overwrite,
-            ))
-            .await?;
-        ensure_kiikoread_success(&response, "upload")
-    }
-
-    async fn upload_whiteos(
-        &self,
-        local_path: PathBuf,
-        file_name: &str,
-        location: &FileLocation,
-        options: UploadOptions,
-    ) -> Result<(), SdkError> {
-        match options.conflict_policy {
-            ConflictPolicy::Fail => {
-                if self
-                    .list_whiteos(location)
-                    .await?
-                    .iter()
-                    .any(|entry| entry.name == file_name)
-                {
-                    return Err(SdkError::Conflict(format!(
-                        "remote file already exists: {file_name}"
-                    )));
-                }
-            }
-            ConflictPolicy::OverwriteWhenSupported => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not declare an overwrite operation".to_owned(),
-                ));
-            }
-            ConflictPolicy::ReplaceWithBackup => {
-                return Err(SdkError::Unsupported(
-                    "WhiteOS does not declare backup replacement".to_owned(),
-                ));
-            }
-        }
-
-        let destination = join_location(location, file_name);
-        let response = self
-            .transport
-            .execute(WhiteOsAdapter::upload_request(
-                local_path,
-                &destination,
-                options.content_type,
-            ))
-            .await?;
-        ensure_whiteos_success(&response, "upload")
-    }
-
-    async fn upload_justread(
-        &self,
-        local_path: PathBuf,
-        file_name: &str,
-        location: &FileLocation,
-        options: UploadOptions,
-        progress: Option<Arc<dyn UploadProgressSink>>,
-    ) -> Result<(), SdkError> {
-        if options.conflict_policy != ConflictPolicy::Fail {
-            return Err(SdkError::Unsupported(
-                "JustRead does not support overwrite".to_owned(),
-            ));
-        }
-        let destination = JustReadAdapter::upload_path(location, file_name)?;
-        let request =
-            JustReadAdapter::upload_request(local_path, &destination, self.justread_access_code())?;
-        let response = self
-            .transport
-            .execute_with_upload_progress(request, progress)
-            .await?;
-        ensure_justread_success(&response, "upload", self.justread_access_code())?;
-        let success: serde_json::Value =
-            serde_json::from_slice(&response.body).map_err(|error| {
-                SdkError::RemoteFailure(format!("invalid JustRead upload response: {error}"))
-            })?;
-        if success.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            return Err(SdkError::RemoteFailure(
-                "JustRead did not confirm the upload".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-
-    async fn upload_crosspoint(
-        &self,
-        local_path: &Path,
-        file_name: &str,
-        location: &FileLocation,
-        options: &UploadOptions,
-        progress: Option<Arc<dyn UploadProgressSink>>,
-    ) -> Result<bool, SdkError> {
-        match options.conflict_policy {
-            ConflictPolicy::OverwriteWhenSupported => {
-                return Err(SdkError::Unsupported(
-                    "CrossPoint does not reliably support direct overwrite".to_owned(),
-                ));
-            }
-            ConflictPolicy::ReplaceWithBackup => {
-                self.require(ids::UPLOAD_BACKUP_REPLACE)?;
-                return self
-                    .crosspoint_backup_replace(local_path, file_name, location, options, progress)
-                    .await;
-            }
-            ConflictPolicy::Fail => {
-                if self
-                    .list_crosspoint(location)
-                    .await?
-                    .iter()
-                    .any(|entry| entry.name == file_name)
-                {
-                    return Err(SdkError::Conflict(format!(
-                        "remote file already exists: {file_name}"
-                    )));
-                }
-            }
-        }
-
-        self.send_crosspoint_upload(local_path, file_name, location, options, progress)
+        self.adapter
+            .apply_settings(expected, changes, self.settings_validation_policy)
             .await
-    }
-
-    async fn send_crosspoint_upload(
-        &self,
-        local_path: &Path,
-        file_name: &str,
-        location: &FileLocation,
-        options: &UploadOptions,
-        progress: Option<Arc<dyn UploadProgressSink>>,
-    ) -> Result<bool, SdkError> {
-        if options.prefer_websocket {
-            self.require(ids::UPLOAD_WEBSOCKET)?;
-            self.transport
-                .upload_websocket(WebSocketUpload {
-                    file_path: local_path.to_path_buf(),
-                    file_name: file_name.to_owned(),
-                    destination: location_string(location),
-                    progress,
-                })
-                .await?;
-            Ok(true)
-        } else {
-            let response = self
-                .transport
-                .execute(CrossPointAdapter::upload_request(
-                    location,
-                    local_path.to_path_buf(),
-                    file_name.to_owned(),
-                    options.content_type.clone(),
-                ))
-                .await?;
-            ensure_success(&response, "upload")?;
-            Ok(false)
-        }
-    }
-
-    async fn crosspoint_backup_replace(
-        &self,
-        local_path: &Path,
-        file_name: &str,
-        location: &FileLocation,
-        options: &UploadOptions,
-        progress: Option<Arc<dyn UploadProgressSink>>,
-    ) -> Result<bool, SdkError> {
-        let expected_size = tokio::fs::metadata(local_path)
-            .await
-            .map_err(|error| SdkError::InvalidArgument(format!("cannot verify upload: {error}")))?
-            .len();
-        let entries = self.list_crosspoint(location).await?;
-        let old_exists = entries.iter().any(|entry| entry.name == file_name);
-        if !old_exists {
-            return self
-                .send_crosspoint_upload(local_path, file_name, location, options, progress)
-                .await;
-        }
-
-        let backup_name = format!("{file_name}.back");
-        if entries.iter().any(|entry| entry.name == backup_name) {
-            return Err(SdkError::Conflict(format!(
-                "backup already exists: {backup_name}"
-            )));
-        }
-        let original_path = join_location(location, file_name);
-        let backup_path = join_location(location, &backup_name);
-        self.execute_success(
-            CrossPointAdapter::rename_request(&original_path, &backup_name),
-            "create backup",
-        )
-        .await?;
-
-        let used_websocket = match self
-            .send_crosspoint_upload(local_path, file_name, location, options, progress)
-            .await
-        {
-            Ok(used_websocket) => used_websocket,
-            Err(upload_error) => {
-                return match self
-                    .execute_success(
-                        CrossPointAdapter::rename_request(&backup_path, file_name),
-                        "restore backup",
-                    )
-                    .await
-                {
-                    Ok(()) => Err(upload_error),
-                    Err(restore_error) => Err(SdkError::RecoveryFailed(format!(
-                        "upload failed ({upload_error}); restoring {backup_path} failed ({restore_error})"
-                    ))),
-                };
-            }
-        };
-
-        let verification = self.list_crosspoint(location).await.map(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry.name == file_name && entry.size == expected_size)
-        });
-        if !matches!(&verification, Ok(true)) {
-            let _ = self
-                .execute_success(
-                    CrossPointAdapter::delete_request(&original_path),
-                    "remove unverified upload",
-                )
-                .await;
-            return match self
-                .execute_success(
-                    CrossPointAdapter::rename_request(&backup_path, file_name),
-                    "restore backup",
-                )
-                .await
-            {
-                Ok(()) => Err(verification.err().unwrap_or_else(|| {
-                    SdkError::RemoteFailure(
-                        "uploaded file size did not match; original restored".to_owned(),
-                    )
-                })),
-                Err(error) => Err(SdkError::RecoveryFailed(format!(
-                    "uploaded file could not be verified and restore failed: {error}"
-                ))),
-            };
-        }
-
-        self.execute_success(
-            CrossPointAdapter::delete_request(&backup_path),
-            "delete backup",
-        )
-        .await
-        .map_err(|error| {
-            SdkError::CommittedButCleanupFailed(format!(
-                "new file committed but {backup_path} could not be deleted: {error}"
-            ))
-        })?;
-        Ok(used_websocket)
-    }
-
-    async fn execute_success(
-        &self,
-        request: crate::transport::HttpRequest,
-        operation: &str,
-    ) -> Result<(), SdkError> {
-        let response = self.transport.execute(request).await?;
-        match self.kind {
-            DeviceKind::ReadPico => ensure_read_pico_success(&response, operation),
-            DeviceKind::CrossPoint => ensure_success(&response, operation),
-            DeviceKind::WhiteOs => ensure_whiteos_success(&response, operation),
-            DeviceKind::KiikoRead => ensure_kiikoread_success(&response, operation),
-            DeviceKind::JustRead => {
-                ensure_justread_success(&response, operation, self.justread_access_code())
-            }
-        }
     }
 
     fn require(&self, capability: &str) -> Result<(), SdkError> {
@@ -1422,14 +608,12 @@ impl DeviceClient {
             )))
         }
     }
-
     fn validate_location(&self, location: &FileLocation) -> Result<(), SdkError> {
         if matches!(location, FileLocation::Directory(_)) {
             self.require(ids::UPLOAD_DIRECTORY_TARGET)?;
         }
         Ok(())
     }
-
     fn validate_upload_format(&self, file_name: &str) -> Result<(), SdkError> {
         if self.profile.file_formats.accepts_any_upload_format {
             return Ok(());
@@ -1453,661 +637,31 @@ impl DeviceClient {
             )))
         }
     }
-
-    async fn ensure_read_pico_font_is_missing(&self, file_name: &str) -> Result<(), SdkError> {
-        // The firmware closes a rejected PUT before consuming its body. Probe
-        // first so duplicate names produce a reliable conflict response.
-        let existing = self
-            .transport
-            .execute(ReadPicoAdapter::font_info_request(file_name.to_owned()))
-            .await?;
-        match existing.status {
-            200 => Err(SdkError::Conflict(format!(
-                "font already exists: {file_name}"
-            ))),
-            404 => Ok(()),
-            409 => Err(SdkError::Unsupported(
-                "Read Pico font upload requires a mounted TF card".to_owned(),
-            )),
-            _ => ensure_read_pico_success(&existing, "check font before upload"),
-        }
-    }
 }
 
-fn ensure_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
-    if (200..300).contains(&response.status) {
-        return Ok(());
-    }
-    let message = response.text_lossy();
-    match response.status {
-        408 => Err(SdkError::Timeout),
-        409 => Err(SdkError::Conflict(message)),
-        413 | 507 => Err(SdkError::InsufficientStorage),
-        400 if message.to_ascii_lowercase().contains("exist") => Err(SdkError::Conflict(message)),
-        _ => Err(SdkError::RemoteFailure(format!(
-            "{operation} failed with HTTP {}: {message}",
-            response.status
-        ))),
-    }
-}
-
-fn ensure_justread_success(
-    response: &HttpResponse,
-    operation: &str,
-    access_code: Option<&str>,
-) -> Result<(), SdkError> {
-    if response.status == 401 {
-        return Err(if access_code.is_some() {
-            SdkError::CredentialRejected {
-                key: ACCESS_CODE_KEY.to_owned(),
-            }
-        } else {
-            SdkError::CredentialRequired {
-                key: ACCESS_CODE_KEY.to_owned(),
-            }
-        });
-    }
-    ensure_success(response, operation)
-}
-
-fn ensure_kiikoread_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
-    let body = response.text_lossy();
-    match response.status {
-        200..=299 => Ok(()),
-        408 => Err(SdkError::Timeout),
-        409 => Err(SdkError::Conflict(body)),
-        413 | 507 => Err(SdkError::InsufficientStorage),
-        _ => Err(SdkError::RemoteFailure(format!(
-            "{operation} failed with HTTP {}: {body}",
-            response.status
-        ))),
-    }
-}
-
-fn ensure_whiteos_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
-    ensure_success(response, operation)?;
-    let value = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
-    if value
-        .as_ref()
-        .and_then(|item| item.get("ok"))
-        .and_then(serde_json::Value::as_bool)
-        == Some(false)
-    {
-        let detail = value
-            .as_ref()
-            .and_then(|item| item.get("error"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("device reported an unsuccessful operation");
-        return Err(SdkError::RemoteFailure(format!(
-            "{operation} failed: {detail}"
-        )));
-    }
-    Ok(())
-}
-
-fn ensure_read_pico_success(response: &HttpResponse, operation: &str) -> Result<(), SdkError> {
-    let body = response.text_lossy();
-    let value = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
-    let committed = value.as_ref().is_some_and(|item| {
-        item.get("committed").and_then(serde_json::Value::as_bool) == Some(true)
-            || item.get("deleted").and_then(serde_json::Value::as_bool) == Some(true)
-    });
-    let cleanup_failed = value.as_ref().is_some_and(|item| {
-        item.get("progress_cleanup_failed")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-    });
-    if committed && cleanup_failed {
-        return Err(SdkError::CommittedWithWarning(body));
-    }
-    ensure_success(response, operation)?;
-    if value
-        .as_ref()
-        .is_some_and(|item| item.get("warning").is_some())
-    {
-        return Err(SdkError::CommittedWithWarning(body));
-    }
-    Ok(())
-}
-
-fn validate_file_name(name: &str) -> Result<(), SdkError> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
-        return Err(SdkError::InvalidArgument(
-            "file name must be a single non-empty path component".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_font_family(family: &str) -> Result<(), SdkError> {
-    validate_file_name(family)?;
-    if family.trim() != family || family.starts_with('.') {
-        return Err(SdkError::InvalidArgument(
-            "invalid font family name".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_remote_path(path: &str) -> Result<(), SdkError> {
-    if !path.starts_with('/') || path.contains("/../") || path.ends_with("/..") {
-        return Err(SdkError::InvalidArgument(
-            "remote path must be absolute and must not traverse parents".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_batch_paths(paths: &[String]) -> Result<(), SdkError> {
-    if paths.is_empty() {
-        return Err(SdkError::InvalidArgument(
-            "at least one file is required".to_owned(),
-        ));
-    }
-    let mut unique = HashSet::with_capacity(paths.len());
-    for path in paths {
-        validate_remote_path(path)?;
-        if !unique.insert(path.as_str()) {
-            return Err(SdkError::InvalidArgument(format!(
-                "duplicate remote path: {path}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn batch_operation_error(
-    operation: &str,
-    completed: usize,
-    total: usize,
-    path: &str,
-    error: &SdkError,
-) -> SdkError {
-    if matches!(
-        error,
-        SdkError::CredentialRequired { .. } | SdkError::CredentialRejected { .. }
-    ) {
-        return error.clone();
-    }
-    SdkError::RemoteFailure(format!(
-        "batch {operation} stopped after {completed}/{total} files; failed at {path}: {error}. Earlier completed files were not rolled back."
-    ))
-}
-
-fn read_pico_name(path: &str) -> Result<&str, SdkError> {
-    let name = path.strip_prefix('/').unwrap_or(path);
-    validate_file_name(name)?;
-    Ok(name)
-}
-
-fn location_string(location: &FileLocation) -> String {
-    match location {
-        FileLocation::Root => "/".to_owned(),
-        FileLocation::Directory(path) => path.clone(),
-    }
-}
-
-fn join_location(location: &FileLocation, name: &str) -> String {
-    let base = location_string(location);
-    if base == "/" {
-        format!("/{name}")
-    } else {
-        format!("{}/{name}", base.trim_end_matches('/'))
-    }
-}
-
-fn infer_file_kind(name: &str) -> FileKind {
-    match Path::new(name)
+fn validate_extension(name: &str, allowed: &[String], label: &str) -> Result<(), SdkError> {
+    let extension = Path::new(name)
         .extension()
-        .and_then(|value| value.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("epub" | "txt" | "md" | "xtc") => FileKind::Book,
-        _ => FileKind::Other,
+        .and_then(|v| v.to_str())
+        .unwrap_or_default();
+    if allowed.iter().any(|v| v.eq_ignore_ascii_case(extension)) {
+        Ok(())
+    } else {
+        Err(SdkError::InvalidArgument(format!(
+            "{label} extension is not supported by this device"
+        )))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::VecDeque,
-        io::Write,
-        sync::{Arc, Mutex as StdMutex},
-    };
-
-    use async_trait::async_trait;
-    use tempfile::NamedTempFile;
-
-    use super::*;
-    use crate::transport::{HttpMethod, HttpRequest, Transport};
-
-    #[derive(Debug)]
-    struct MockTransport {
-        responses: StdMutex<VecDeque<HttpResponse>>,
-        requests: StdMutex<Vec<HttpRequest>>,
-        downloads: StdMutex<Vec<HttpRequest>>,
-        upload_progress_observers: StdMutex<Vec<bool>>,
-    }
-
-    impl MockTransport {
-        fn new(responses: Vec<HttpResponse>) -> Arc<Self> {
-            Arc::new(Self {
-                responses: StdMutex::new(responses.into()),
-                requests: StdMutex::new(Vec::new()),
-                downloads: StdMutex::new(Vec::new()),
-                upload_progress_observers: StdMutex::new(Vec::new()),
-            })
-        }
-
-        fn request_count(&self) -> usize {
-            self.requests.lock().unwrap().len()
-        }
-    }
-
-    #[async_trait]
-    impl Transport for MockTransport {
-        async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError> {
-            self.requests.lock().unwrap().push(request);
-            self.responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .ok_or_else(|| SdkError::RemoteFailure("missing mock response".to_owned()))
-        }
-
-        async fn execute_with_upload_progress(
-            &self,
-            request: HttpRequest,
-            progress: Option<Arc<dyn UploadProgressSink>>,
-        ) -> Result<HttpResponse, SdkError> {
-            self.upload_progress_observers
-                .lock()
-                .unwrap()
-                .push(progress.is_some());
-            if let Some(progress) = progress {
-                progress.report(2, 4);
-            }
-            self.execute(request).await
-        }
-
-        async fn download(
-            &self,
-            request: HttpRequest,
-            _destination: PathBuf,
-        ) -> Result<(), SdkError> {
-            self.downloads.lock().unwrap().push(request);
-            Ok(())
-        }
-    }
-
-    fn response(status: u16, body: &str) -> HttpResponse {
-        HttpResponse {
-            status,
-            body: body.as_bytes().to_vec(),
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingProgress(StdMutex<Vec<(u64, u64)>>);
-
-    impl UploadProgressSink for RecordingProgress {
-        fn report(&self, sent_bytes: u64, total_bytes: u64) {
-            self.0.lock().unwrap().push((sent_bytes, total_bytes));
-        }
-    }
-
-    #[tokio::test]
-    async fn whiteos_delete_accepts_ok_response_and_sends_request_header() {
-        let transport = MockTransport::new(vec![response(200, r#"{"ok":true}"#)]);
-        let client = DeviceClient::with_transport(DeviceKind::WhiteOs, transport.clone());
-
-        client.delete("/Books/book.epub".to_owned()).await.unwrap();
-
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests[0].method, HttpMethod::Post);
-        assert_eq!(requests[0].path, "/api/delete");
-        assert_eq!(
-            requests[0].query,
-            [("path".to_owned(), "/Books/book.epub".to_owned())]
-        );
-        assert!(
-            requests[0]
-                .headers
-                .iter()
-                .any(|(name, value)| name == "X-Pico-Request" && value == "1")
-        );
-    }
-
-    #[tokio::test]
-    async fn whiteos_delete_propagates_unsuccessful_json_response() {
-        let transport = MockTransport::new(vec![response(
-            200,
-            r#"{"ok":false,"error":"delete failed"}"#,
-        )]);
-        let client = DeviceClient::with_transport(DeviceKind::WhiteOs, transport);
-
-        let result = client.delete("/Books/book.epub".to_owned()).await;
-
-        assert!(
-            matches!(result, Err(SdkError::RemoteFailure(message)) if message.contains("delete failed"))
-        );
-    }
-
-    #[tokio::test]
-    async fn read_pico_font_upload_uses_font_endpoint_and_preserves_conflict() {
-        let transport = MockTransport::new(vec![
-            response(200, r#"{"name":"test.ttf","size":9}"#),
-            response(200, r#"{"ok":true}"#),
-        ]);
-        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"font data").unwrap();
-        let path = file.path().to_path_buf();
-        let first = client
-            .upload_font(String::new(), path.clone(), "test.ttf".to_owned())
-            .await;
-        assert!(matches!(first, Err(SdkError::Conflict(_))));
-        client
-            .upload_font_with_overwrite(String::new(), path, "test.ttf".to_owned(), true)
-            .await
-            .unwrap();
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests[0].method, HttpMethod::Get);
-        assert_eq!(requests[0].path, "/fonts");
-        assert!(
-            requests[0]
-                .query
-                .iter()
-                .any(|(key, value)| key == "name" && value == "test.ttf")
-        );
-        assert_eq!(requests[1].method, HttpMethod::Put);
-        assert_eq!(requests[1].path, "/fonts");
-        assert!(
-            requests[1]
-                .query
-                .iter()
-                .any(|(key, value)| key == "overwrite" && value == "1")
-        );
-    }
-
-    #[tokio::test]
-    async fn read_pico_font_upload_reports_missing_card() {
-        let transport = MockTransport::new(vec![response(409, r#"{"error":"字体需要 TF 卡"}"#)]);
-        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport);
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"font data").unwrap();
-        let result = client
-            .upload_font(
-                String::new(),
-                file.path().to_path_buf(),
-                "test.ttf".to_owned(),
-            )
-            .await;
-        assert!(matches!(result, Err(SdkError::Unsupported(_))));
-    }
-
-    #[tokio::test]
-    async fn read_pico_file_pages_are_hidden_from_callers() {
-        let transport = MockTransport::new(vec![
-            response(
-                200,
-                r#"{"page":0,"total":2,"pages":2,"items":[{"name":"a.epub","size":1}]}"#,
-            ),
-            response(
-                200,
-                r#"{"page":1,"total":2,"pages":2,"items":[{"name":"b.txt","size":2}]}"#,
-            ),
-        ]);
-        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
-
-        let files = client.list_files(FileLocation::Root).await.unwrap();
-
-        assert_eq!(files.len(), 2);
-        assert_eq!(transport.request_count(), 2);
-    }
-
-    #[tokio::test]
-    async fn unsupported_capability_does_not_send_a_request() {
-        let transport = MockTransport::new(Vec::new());
-        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
-
-        let result = client
-            .download("/book.epub".to_owned(), PathBuf::from("unused"))
-            .await;
-
-        assert!(matches!(result, Err(SdkError::Unsupported(_))));
-        assert_eq!(transport.request_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn crosspoint_backup_replace_verifies_before_cleanup() {
-        let transport = MockTransport::new(vec![
-            response(
-                200,
-                r#"[{"name":"book.epub","size":3,"isDirectory":false,"isEpub":true}]"#,
-            ),
-            response(200, "renamed"),
-            response(200, "uploaded"),
-            response(
-                200,
-                r#"[{"name":"book.epub","size":4,"isDirectory":false,"isEpub":true},{"name":"book.epub.back","size":3,"isDirectory":false,"isEpub":false}]"#,
-            ),
-            response(200, "deleted"),
-        ]);
-        let client = DeviceClient::with_transport(DeviceKind::CrossPoint, transport.clone());
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"book").unwrap();
-
-        let result = client
-            .upload(
-                file.path().to_path_buf(),
-                "book.epub".to_owned(),
-                FileLocation::Directory("/Books".to_owned()),
-                UploadOptions {
-                    conflict_policy: ConflictPolicy::ReplaceWithBackup,
-                    content_type: None,
-                    prefer_websocket: false,
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(result.entry.path, "/Books/book.epub");
-        assert_eq!(transport.request_count(), 5);
-    }
-
-    #[tokio::test]
-    async fn settings_reject_stale_snapshot_before_post() {
-        let old = r#"[{"key":"fontSize","name":"Font size","category":"Reader","type":"enum","value":0,"options":["12 pt","14 pt"]}]"#;
-        let changed = r#"[{"key":"fontSize","name":"Font size","category":"Reader","type":"enum","value":0,"options":["10 pt","12 pt"]}]"#;
-        let transport = MockTransport::new(vec![response(200, old), response(200, changed)]);
-        let client = DeviceClient::with_transport(DeviceKind::CrossPoint, transport.clone());
-        let snapshot = client.list_settings().await.unwrap();
-        let result = client
-            .apply_settings(
-                snapshot,
-                vec![SettingChange {
-                    key: "fontSize".to_owned(),
-                    value: crate::SettingValue::Choice(1),
-                }],
-            )
-            .await;
-        assert!(matches!(result, Err(SdkError::Conflict(_))));
-        assert_eq!(transport.request_count(), 2);
-    }
-
-    #[tokio::test]
-    async fn read_pico_settings_are_capability_gated() {
-        let transport = MockTransport::new(Vec::new());
-        let client = DeviceClient::with_transport(DeviceKind::ReadPico, transport.clone());
-        assert!(matches!(
-            client.list_settings().await,
-            Err(SdkError::Unsupported(_))
-        ));
-        assert_eq!(transport.request_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn settings_post_only_changed_values_and_return_refreshed_snapshot() {
-        let old = r#"[{"key":"showHiddenFiles","name":"Show hidden files","category":"Files","type":"toggle","value":0}]"#;
-        let new = r#"[{"key":"showHiddenFiles","name":"Show hidden files","category":"Files","type":"toggle","value":1}]"#;
-        let transport = MockTransport::new(vec![
-            response(200, old),
-            response(200, old),
-            response(200, "Applied 1 setting(s)"),
-            response(200, new),
-        ]);
-        let client = DeviceClient::with_transport(DeviceKind::CrossPoint, transport.clone());
-        let snapshot = client.list_settings().await.unwrap();
-        let updated = client
-            .apply_settings(
-                snapshot,
-                vec![SettingChange {
-                    key: "showHiddenFiles".to_owned(),
-                    value: crate::SettingValue::Toggle(true),
-                }],
-            )
-            .await
-            .unwrap();
-        assert_eq!(updated.settings[0].value, crate::SettingValue::Toggle(true));
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4);
-        assert_eq!(requests[2].path, "/api/settings");
-        assert!(
-            matches!(&requests[2].body, crate::transport::HttpBody::Json(body)
-            if serde_json::from_slice::<serde_json::Value>(body).unwrap() == serde_json::json!({"showHiddenFiles":1}))
-        );
-    }
-
-    #[tokio::test]
-    async fn justread_probe_requests_code_and_rejects_wrong_code_without_leaking_it() {
-        let transport = MockTransport::new(vec![response(401, "访问码错误")]);
-        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone());
-        assert_eq!(
-            client.verify_connection().await,
-            Err(SdkError::CredentialRequired {
-                key: ACCESS_CODE_KEY.to_owned(),
-            })
-        );
-        assert!(
-            !transport.requests.lock().unwrap()[0]
-                .headers
-                .iter()
-                .any(|(name, _)| name == "X-Transfer-Token")
-        );
-
-        let transport = MockTransport::new(vec![response(401, "访问码错误")]);
-        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
-            .with_session_credentials(HashMap::from([(
-                ACCESS_CODE_KEY.to_owned(),
-                "WRONG".to_owned(),
-            )]));
-        assert_eq!(
-            client.verify_connection().await,
-            Err(SdkError::CredentialRejected {
-                key: ACCESS_CODE_KEY.to_owned(),
-            })
-        );
-        assert!(!format!("{client:?}").contains("WRONG"));
-    }
-
-    #[tokio::test]
-    async fn justread_session_uses_code_for_listing_and_uploads_books_to_shelf() {
-        let empty = r#"{"entries":[],"truncated":false}"#;
-        let transport = MockTransport::new(vec![
-            response(200, empty),
-            response(200, empty),
-            response(200, r#"{"ok":true}"#),
-        ]);
-        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
-            .with_session_credentials(HashMap::from([(
-                ACCESS_CODE_KEY.to_owned(),
-                "ABCD2345EFGH".to_owned(),
-            )]));
-        client.verify_connection().await.unwrap();
-        client.list_files(FileLocation::Root).await.unwrap();
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"book").unwrap();
-        let result = client
-            .upload(
-                file.path().to_path_buf(),
-                "book.epub".to_owned(),
-                FileLocation::Root,
-                UploadOptions::default(),
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.entry.path, "/books/book.epub");
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests.len(), 3);
-        assert!(requests.iter().all(|request| {
-            request
-                .headers
-                .iter()
-                .any(|(name, value)| name == "X-Transfer-Token" && value == "ABCD2345EFGH")
-        }));
-        assert_eq!(requests[2].path, "/api/upload");
-        assert!(
-            requests[2].headers.iter().any(|(name, value)| {
-                name == "X-Transfer-Path" && value == "Ym9va3MvYm9vay5lcHVi"
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn justread_upload_forwards_http_byte_progress() {
-        let transport = MockTransport::new(vec![response(200, r#"{"ok":true}"#)]);
-        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone());
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(b"book").unwrap();
-        let progress = Arc::new(RecordingProgress::default());
-
-        client
-            .upload(
-                file.path().to_path_buf(),
-                "book.epub".to_owned(),
-                FileLocation::Root,
-                UploadOptions::default(),
-                Some(progress.clone()),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(*transport.upload_progress_observers.lock().unwrap(), [true]);
-        assert_eq!(*progress.0.lock().unwrap(), [(2, 4)]);
-    }
-
-    #[tokio::test]
-    async fn justread_download_exchanges_authenticated_ticket_for_streaming_request() {
-        let transport = MockTransport::new(vec![response(
-            200,
-            r#"{"url":"/api/download-file?t=ABCD2345EFGH","name":"book.epub"}"#,
-        )]);
-        let client = DeviceClient::with_transport(DeviceKind::JustRead, transport.clone())
-            .with_session_credentials(HashMap::from([(
-                ACCESS_CODE_KEY.to_owned(),
-                "SESSIONCODE12".to_owned(),
-            )]));
-        client
-            .download("/books/book.epub".to_owned(), PathBuf::from("unused"))
-            .await
-            .unwrap();
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests[0].path, "/api/download-ticket");
-        assert!(
-            requests[0]
-                .headers
-                .iter()
-                .any(|(name, value)| { name == "X-Transfer-Token" && value == "SESSIONCODE12" })
-        );
-        let downloads = transport.downloads.lock().unwrap();
-        assert_eq!(downloads[0].path, "/api/download-file");
-        assert_eq!(
-            downloads[0].query,
-            [("t".to_owned(), "ABCD2345EFGH".to_owned())]
-        );
+async fn file_size(path: &Path, label: &str) -> Result<u64, SdkError> {
+    let size = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| SdkError::InvalidArgument(format!("cannot read {label}: {e}")))?
+        .len();
+    if size == 0 {
+        Err(SdkError::InvalidArgument(format!(
+            "{label} must not be empty"
+        )))
+    } else {
+        Ok(size)
     }
 }

@@ -149,6 +149,7 @@ pub struct FontFamily {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FontCatalog {
+    /// Maximum number of font families, or zero when firmware does not report a limit.
     pub max_families: u32,
     pub families: Vec<FontFamily>,
 }

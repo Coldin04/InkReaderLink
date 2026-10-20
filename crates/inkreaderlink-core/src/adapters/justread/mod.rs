@@ -207,12 +207,14 @@ impl JustReadAdapter {
         }
         let mut request = HttpRequest::new(HttpMethod::Get, "/api/download-file");
         request.query.push(("t".to_owned(), value.to_owned()));
+        request.sensitive = true;
         Ok(request)
     }
 }
 
 fn add_access_code(request: &mut HttpRequest, code: Option<&str>) -> Result<(), SdkError> {
     if let Some(code) = code {
+        request.sensitive = true;
         if code.is_empty() || code.len() > 32 || !code.bytes().all(|byte| byte.is_ascii_graphic()) {
             return Err(SdkError::InvalidArgument(
                 "invalid JustRead access code".to_owned(),
@@ -324,3 +326,10 @@ mod tests {
         );
     }
 }
+
+pub(crate) mod session;
+
+pub(crate) mod definition;
+
+#[cfg(test)]
+mod session_tests;

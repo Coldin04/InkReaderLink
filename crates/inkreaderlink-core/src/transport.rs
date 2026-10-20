@@ -16,9 +16,10 @@ use reqwest::{Body, Client, Method, multipart};
 use tokio::{
     fs::File,
     io::AsyncWriteExt,
-    time::{Instant as TokioInstant, MissedTickBehavior, interval, timeout},
+    time::{Instant as TokioInstant, MissedTickBehavior, interval},
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+pub use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tokio_util::io::ReaderStream;
 use url::Url;
 
@@ -171,30 +172,25 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     pub body: HttpBody,
     pub response_limit: Option<usize>,
+    /// Adapter-provided marker: omit credential-bearing request data from Debug.
+    pub sensitive: bool,
 }
 
 impl fmt::Debug for HttpRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let headers = self
-            .headers
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.as_str(),
-                    if name.eq_ignore_ascii_case("X-Transfer-Token") {
-                        "<redacted>"
-                    } else {
-                        value.as_str()
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
+        if self.sensitive {
+            return formatter
+                .debug_struct("HttpRequest")
+                .field("method", &self.method)
+                .field("payload", &"<redacted>")
+                .finish_non_exhaustive();
+        }
         formatter
             .debug_struct("HttpRequest")
             .field("method", &self.method)
             .field("path", &self.path)
             .field("query", &self.query)
-            .field("headers", &headers)
+            .field("headers", &self.headers)
             .field("body", &self.body)
             .field("response_limit", &self.response_limit)
             .finish()
@@ -211,6 +207,7 @@ impl HttpRequest {
             headers: Vec::new(),
             body: HttpBody::Empty,
             response_limit: None,
+            sensitive: false,
         }
     }
 }
@@ -228,28 +225,29 @@ impl HttpResponse {
     }
 }
 
-#[derive(Clone)]
-pub struct WebSocketUpload {
-    pub file_path: PathBuf,
-    pub file_name: String,
-    pub destination: String,
-    pub progress: Option<Arc<dyn UploadProgressSink>>,
+/// A raw WebSocket connection. Wire messages and their meaning belong to adapters.
+#[async_trait]
+pub trait WebSocketConnection: Send {
+    async fn send(&mut self, message: WebSocketMessage) -> Result<(), SdkError>;
+    async fn receive(&mut self) -> Result<Option<WebSocketMessage>, SdkError>;
 }
-
-impl fmt::Debug for WebSocketUpload {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("WebSocketUpload")
-            .field("file_path", &self.file_path)
-            .field("file_name", &self.file_name)
-            .field("destination", &self.destination)
-            .field("progress", &self.progress.is_some())
-            .finish()
+struct NetworkWebSocket(WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>);
+#[async_trait]
+impl WebSocketConnection for NetworkWebSocket {
+    async fn send(&mut self, message: WebSocketMessage) -> Result<(), SdkError> {
+        self.0.send(message).await.map_err(map_websocket_error)
+    }
+    async fn receive(&mut self) -> Result<Option<WebSocketMessage>, SdkError> {
+        self.0.next().await.transpose().map_err(map_websocket_error)
     }
 }
 
 #[async_trait]
 pub trait Transport: Send + Sync + std::fmt::Debug {
+    fn origin(&self) -> Option<String> {
+        None
+    }
+
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError>;
 
     async fn execute_with_upload_progress(
@@ -263,10 +261,9 @@ pub trait Transport: Send + Sync + std::fmt::Debug {
 
     async fn download(&self, request: HttpRequest, destination: PathBuf) -> Result<(), SdkError>;
 
-    async fn upload_websocket(&self, upload: WebSocketUpload) -> Result<(), SdkError> {
-        let _ = upload;
+    async fn open_websocket(&self, _url: &str) -> Result<Box<dyn WebSocketConnection>, SdkError> {
         Err(SdkError::Unsupported(
-            "WebSocket upload is unavailable for this transport".to_owned(),
+            "WebSocket connections are unavailable for this transport".to_owned(),
         ))
     }
 }
@@ -330,12 +327,10 @@ impl ReqwestTransport {
             .base_url
             .join(request.path.trim_start_matches('/'))
             .map_err(|error| SdkError::InvalidArgument(format!("invalid endpoint: {error}")))?;
-        {
+        if !request.query.is_empty() {
             url.query_pairs_mut().extend_pairs(request.query.iter());
         }
-        // The device's browser uploader uses encodeURIComponent, which emits
-        // `%20` for spaces. Keep the same query representation instead of the
-        // `+` emitted by form-style query serialization.
+        // Preserve query spaces as percent encoding instead of form-style `+`.
         if let Some(query) = url.query().map(str::to_owned) {
             let query = query.replace('+', "%20");
             url.set_query(Some(&query));
@@ -409,19 +404,14 @@ impl ReqwestTransport {
             }
         }
     }
-
-    fn websocket_url(&self) -> Result<Url, SdkError> {
-        let mut url = self.base_url.clone();
-        url.set_scheme(if url.scheme() == "https" { "wss" } else { "ws" })
-            .map_err(|()| SdkError::InvalidArgument("invalid WebSocket scheme".to_owned()))?;
-        url.set_port(Some(81))
-            .map_err(|()| SdkError::InvalidArgument("invalid WebSocket port".to_owned()))?;
-        Ok(url)
-    }
 }
 
 #[async_trait]
 impl Transport for ReqwestTransport {
+    fn origin(&self) -> Option<String> {
+        Some(self.base_url.origin().ascii_serialization())
+    }
+
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, SdkError> {
         let response_limit = request.response_limit;
         let response = self
@@ -506,120 +496,11 @@ impl Transport for ReqwestTransport {
             .map_err(map_file_error)
     }
 
-    async fn upload_websocket(&self, upload: WebSocketUpload) -> Result<(), SdkError> {
-        let size = tokio::fs::metadata(&upload.file_path)
-            .await
-            .map_err(map_file_error)?
-            .len();
-        let (socket, _) = connect_async(self.websocket_url()?.as_str())
+    async fn open_websocket(&self, url: &str) -> Result<Box<dyn WebSocketConnection>, SdkError> {
+        let (socket, _) = connect_async(url)
             .await
             .map_err(|_| SdkError::Unreachable)?;
-        let (mut sender, mut receiver) = socket.split();
-        sender
-            .send(Message::Text(
-                format!("START:{}:{size}:{}", upload.file_name, upload.destination).into(),
-            ))
-            .await
-            .map_err(map_websocket_error)?;
-        expect_websocket_text(&mut receiver, "READY").await?;
-
-        let mut file = File::open(&upload.file_path)
-            .await
-            .map_err(map_file_error)?;
-        let mut buffer = vec![0_u8; 4096];
-        loop {
-            let read = tokio::io::AsyncReadExt::read(&mut file, &mut buffer)
-                .await
-                .map_err(map_file_error)?;
-            if read == 0 {
-                break;
-            }
-            sender
-                .send(Message::Binary(buffer[..read].to_vec().into()))
-                .await
-                .map_err(map_websocket_error)?;
-            drain_websocket_progress(&mut receiver, upload.progress.as_deref()).await?;
-        }
-
-        loop {
-            let message = receiver
-                .next()
-                .await
-                .ok_or_else(|| SdkError::RemoteFailure("WebSocket closed before DONE".to_owned()))?
-                .map_err(map_websocket_error)?;
-            if let Message::Text(text) = message {
-                if text == "DONE" {
-                    return Ok(());
-                }
-                if let Some((sent, total)) = parse_progress(&text) {
-                    if let Some(progress) = upload.progress.as_deref() {
-                        progress.report(sent, total);
-                    }
-                }
-                if let Some(message) = text.strip_prefix("ERROR:") {
-                    return Err(map_remote_message(message));
-                }
-            }
-        }
-    }
-}
-
-async fn drain_websocket_progress<S>(
-    receiver: &mut S,
-    progress: Option<&dyn UploadProgressSink>,
-) -> Result<(), SdkError>
-where
-    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    loop {
-        let next = timeout(Duration::from_millis(1), receiver.next()).await;
-        let Ok(Some(message)) = next else {
-            return Ok(());
-        };
-        let message = message.map_err(map_websocket_error)?;
-        if let Message::Text(text) = message {
-            if let Some((sent, total)) = parse_progress(&text) {
-                if let Some(progress) = progress {
-                    progress.report(sent, total);
-                }
-            } else if let Some(error) = text.strip_prefix("ERROR:") {
-                return Err(map_remote_message(error));
-            }
-        }
-    }
-}
-
-fn parse_progress(text: &str) -> Option<(u64, u64)> {
-    let mut fields = text.strip_prefix("PROGRESS:")?.split(':');
-    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
-}
-
-async fn expect_websocket_text<S>(socket: &mut S, expected: &str) -> Result<(), SdkError>
-where
-    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
-    while let Some(message) = socket.next().await {
-        if let Message::Text(text) = message.map_err(map_websocket_error)? {
-            if text == expected {
-                return Ok(());
-            }
-            if let Some(message) = text.strip_prefix("ERROR:") {
-                return Err(map_remote_message(message));
-            }
-        }
-    }
-    Err(SdkError::RemoteFailure(format!(
-        "WebSocket closed before {expected}"
-    )))
-}
-
-fn map_remote_message(message: &str) -> SdkError {
-    if message.to_ascii_lowercase().contains("already") {
-        SdkError::Conflict(message.to_owned())
-    } else if message.to_ascii_lowercase().contains("disk full") {
-        SdkError::InsufficientStorage
-    } else {
-        SdkError::RemoteFailure(message.to_owned())
+        Ok(Box::new(NetworkWebSocket(socket)))
     }
 }
 
@@ -652,47 +533,34 @@ pub type SharedTransport = Arc<dyn Transport>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::whiteos::WhiteOsAdapter;
 
     #[test]
     fn accepts_qr_ip_hostname_and_full_url_inputs() {
-        for input in ["192.168.4.1", "crosspoint.local", "http://192.168.4.1/"] {
+        for input in ["192.0.2.1", "reader.example.test", "http://192.0.2.1/"] {
             ReqwestTransport::new(input, Duration::from_secs(5)).unwrap();
         }
     }
 
     #[test]
     fn rejects_non_http_schemes() {
-        let error = ReqwestTransport::new("ftp://192.168.4.1", Duration::from_secs(5));
+        let error = ReqwestTransport::new("ftp://192.0.2.1", Duration::from_secs(5));
         assert!(matches!(error, Err(SdkError::InvalidArgument(_))));
     }
 
     #[test]
-    fn whiteos_upload_uses_put_and_encodes_the_full_path_as_a_query_value() {
-        let transport = ReqwestTransport::new("192.168.8.156", Duration::from_secs(5)).unwrap();
-        let remote_path = "/《创业在路上》电子书下载 罗永浩.epub";
-        let request =
-            WhiteOsAdapter::upload_request(PathBuf::from("/tmp/book.epub"), remote_path, None);
-
-        assert_eq!(request.method, HttpMethod::Put);
-        assert_eq!(request.path, "/api/upload");
+    fn request_url_preserves_unicode_and_encodes_query_spaces() {
+        let transport =
+            ReqwestTransport::new("https://reader.example.test", Duration::from_secs(5)).unwrap();
+        let mut request = HttpRequest::new(HttpMethod::Get, "/files");
+        request
+            .query
+            .push(("name".to_owned(), "中文 book.epub".to_owned()));
         let url = transport.request_url(&request).unwrap();
-        assert_eq!(url.path(), "/api/upload");
         assert!(url.as_str().contains("%20"));
         assert_eq!(
-            url.query_pairs().find(|(key, _)| key == "path").unwrap().1,
-            remote_path
+            url.query_pairs().find(|(key, _)| key == "name").unwrap().1,
+            "中文 book.epub"
         );
-    }
-
-    #[test]
-    fn parses_crosspoint_progress_messages() {
-        assert_eq!(
-            parse_progress("PROGRESS:65536:123456"),
-            Some((65_536, 123_456))
-        );
-        assert_eq!(parse_progress("DONE"), None);
-        assert_eq!(parse_progress("PROGRESS:bad:123456"), None);
     }
 
     #[test]

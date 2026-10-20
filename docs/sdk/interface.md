@@ -4,6 +4,22 @@
 
 `inkreaderlink-core` 提供与平台无关的设备模型、错误、异步客户端和固件 adapters；它不依赖 UniFFI 或移动端运行时。`inkreaderlink-uniffi` 是移动端边界层，负责把核心模型、错误和异步操作映射为 UniFFI API。设备协议和能力策略只实现于核心 crate，其他入口应复用核心 API，而不是复制 adapter。
 
+`DeviceClient` 只执行通用输入校验、capability 门控、修改操作串行化和统一委派。
+连接创建时由 adapter 工厂选定实现，随后替换 profile 仅改变设备声明，不改变协议。
+连接地址和凭据分别通过 `configure_address` 与 `set_session_credentials` 交给该 adapter；
+上传等操作以 `FileUpload`、`FontUpload`、`WallpaperUpload` 等内部类型化参数传递。
+固件的地址解析、认证和会话、分页、预检查、限制、备份恢复与结果核对由 adapter 完整执行。
+
+各固件代码位于 `adapters/<firmware>/`：`definition.rs` 声明设备能力和格式，
+`mod.rs` 实现请求与响应编解码，`session.rs` 持有会话状态并编排协议流程；
+CrossPoint 的原始 WebSocket 消息和动态设置编解码也位于其目录内。
+固件协议测试与实现同目录；client/transport 测试仅覆盖通用行为。
+
+UniFFI 的 `models/` 处理按能力分组的模型转换，`client/` 按能力导出统一操作，
+`connection.rs` 处理声明式连接字段，`runtime.rs` 桥接 Tokio，`error.rs` 和
+`progress.rs` 映射错误与进度。`lib.rs` 仅保留模块、重导出和 scaffolding。
+移动 Rust 类型或导出方法到子模块可能改变 UniFFI 校验和，即使外部签名未变，也必须成套重建绑定和原生库。
+
 Android AAR 将同一 SDK 源码构建出的 Kotlin 绑定与 `libcold04_inkreaderlink.so` 一起打包。Kotlin 包为 `uniffi.inkreaderlink_uniffi`，JNI 加载名为 `cold04_inkreaderlink`；iOS Swift module 为 `InkReaderLink`。绑定或导出 ABI 改动必须同时重新生成绑定与原生库。
 
 Flutter 接入可在现有核心之上增加 Dart FFI 或插件边界，服务端可直接依赖核心 crate 并选择合适的 async runtime。当前尚未为这两类入口增加代码或依赖。
@@ -14,7 +30,7 @@ Flutter 接入可在现有核心之上增加 Dart FFI 或插件边界，服务�
 constraint 渲染功能，不应根据设备类型硬编码界面。
 
 `inkreaderlink_core::config::DeviceDefinition` 是设备声明的统一配置入口。新增或调整
-固件时，应在此处集中配置格式、约束和可选能力。`files.upload` 是所有受支持
+固件时，应在对应 adapter 的 `definition.rs` 中配置格式、约束和可选能力，并由 `config` 注册。`files.upload` 是所有受支持
 设备的最低能力，由 SDK 保证存在；文件列表、删除、下载、目录、重命名、移动、
 WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。只支持上传的设备可直接使用
 `DeviceDefinition::upload_only`。
@@ -31,6 +47,15 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 `connectionFields`。设备选择列表和连接表单应使用这个目录，不应在 App 中维护另一份
 固件名称或字段清单。
 
+设备目录中的 CrossMux（`crossmux`）和 RickyOS（`rickyos`）是两个独立条目，分别保留设备类型
+和显示名称；协议操作都路由到 CrossPoint adapter，并声明与 CrossPoint 相同的能力和格式。
+if-ink OS（`if-ink-os`）使用独立 adapter 和 profile；`/info`、目录列表、字体、壁纸和 Wi-Fi 的
+基础请求及响应解析复用 KiikoRead 协议，任意目标路径上传、Markdown 导入、文件变更和 Wi-Fi
+删除使用 if-ink OS 专属请求。
+PageRest（`pagerest`）使用独立 adapter；图书分页响应解析和 Wi-Fi 凭据 JSON 复用 Read Pico，
+其余存储信息、上传预检查、原始文件上传、字体/图片列表与删除及上传结果核对使用 PageRest 接口。
+连接只需普通设备地址，不使用 URL 访问码或 `X-Pico-Token`；也不复用 Pico Page 的会话处理。
+
 `SdkConnectionField` 以 `key` 标识值，包含显示标签 `label`、是否在初次提交时必填的
 `required`、输入类型 `kind` 和保存责任 `retention`：`Text` 渲染文本框，`Secret`
 渲染密码框，`Address` 渲染地址输入框并允许接入原生扫码，带 `options` 的 `Choice`
@@ -44,11 +69,17 @@ WebSocket 上传、Wi-Fi、字体和 OPDS 管理等能力均为可选配置。�
 是否存在、类型是否匹配、选项索引是否有效以及必填字段是否齐全。
 
 当前设备都声明一个必填 `Address` 字段，key 为 `address`。JustRead 的设备名称为
-`JustRead(实验性)`，另声明 `Secret` 字段 `access_code`（显示名“设备访问码”，
+`JustRead`，另声明 `Secret` 字段 `access_code`（显示名“设备访问码”，
 `Session`）。App 只保存 `AppManaged` 字段；旧版仅保存 `address` 的记录可迁移为同名字段。
 设备连接调用 `connectAndVerifyWithParameters(deviceType, parameters, timeoutMs)`；地址值由
 SDK 声明的 `Address` 字段提供。原有 `connectAndVerify(deviceType, address, timeoutMs)`
 仍可用于只需设备地址的调用。SDK 接受裸 IPv4/hostname 或完整 HTTP/HTTPS URL。
+
+Pico Page 同样声明可选 `Session` 凭据 `access_code`。地址可以是裸设备 origin，也可以是
+设备二维码提供的完整 URL（例如 `http://192.168.0.120/j5za8a`）。完整 URL 的单段字母数字
+路径由 adapter 解析为访问码；只输入 origin 时，连接探测返回 `CredentialRequired`，由 App
+按声明弹出访问码输入框。若路径码错误，设备返回的“请扫描二维码或输入完整地址”页面会映射为
+`CredentialRejected`，让 App 提示用户重新输入。访问码只在 SDK 当前会话中使用。
 
 连接 JustRead 时先只提交地址。固件返回 401 后，SDK 返回可按错误变体识别的
 `CredentialRequired { key: "access_code" }`；App 再按字段声明弹出密码输入，附上
@@ -111,10 +142,10 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 
 当前约束：
 
-| 字段 | Read Pico | CrossPoint | WhiteOS | KiikoRead 固件 | JustRead |
-|---|---:|---:|---:|---:|---:|
-| `can_list_directories` | false | true | true | true | true |
-| `can_choose_upload_directory` | false | true | true | false | true |
+| 字段 | Read Pico | CrossPoint | CrossMux / RickyOS | WhiteOS | KiikoRead 固件 | if-ink OS | JustRead | PageRest |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `can_list_directories` | false | true | true | true | true | true | true | false |
+| `can_choose_upload_directory` | false | true | true | true | false | true | true | false |
 
 固件格式声明：
 
@@ -124,7 +155,27 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | CrossPoint | 任意文件 | `.cpfont` | — | EPUB、TXT、Markdown、XTC |
 | WhiteOS | API 接受任意扩展名 | — | — | TXT、EPUB、PDF |
 | KiikoRead 固件 | EPUB、TXT | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
+| if-ink OS | EPUB、TXT、Markdown | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT、Markdown |
 | JustRead | 任意文件 | — | — | EPUB、TXT |
+| Pico Page | EPUB、TXT、TTF、OTF、PNG、JPEG | — | — | EPUB、TXT |
+| PageRest | EPUB、TXT | `.ttf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
+
+Pico Page 提供一个上传接口；SDK 仅按定义中声明的扩展名接受文件，并将文件流发送至设备。
+设备负责决定文件保存位置和限制。SDK 在每个文件上传前重新读取已验证的传书页，从页面脚本提取
+当前会话 token，并将同一 token 用于 `/check` 和 `/upload`；同时携带浏览器上传请求中的
+`Origin` 与访问码页面 `Referer`。流式上传前通过 CRC-32 请求校验文件。非 200 响应保留设备
+返回的 HTTP 状态和正文，不推断冲突、格式或存储错误。设备未声明文件列表、覆盖或目标目录能力。
+
+PageRest 从普通设备地址读取 `/info`；图书列表和删除沿用 Read Pico 的 `/books` 协议及分页模型。
+上传前读取 `/info` 的可用状态、单文件限制和剩余空间，再向 `/upload-check?kind=...&name=...&size=...`
+发送空 POST。若同名文件存在且调用方选择覆盖，SDK 在后续原始 `PUT` 中附加 `overwrite=1`；正文使用流式文件体，
+不使用 multipart。图书、字体和图片分别上传到 `/upload`、`/fonts`、`/images`；错误响应的设备正文会保留。
+字体和图片管理读取 `/fs?root=fonts|images` 并过滤目录项，删除分别调用 `/fonts?name=...` 和
+`/images?name=...`。PageRest 的字体接口按单文件管理，现有 `FontCatalog` 模型以文件名作为族名，
+并在该设备上将 `max_families=0` 表示固件未报告族数量上限。上传连接中断时，SDK 对照预检查返回的序号和
+`/info.last_upload` 的序号、文件名、总字节数及错误状态；只有全部匹配时才显示设备错误，否则返回“结果未确认”。
+Wi-Fi 的信息解析、保存请求和遗忘请求复用 Read Pico；保存/遗忘仅允许 `mode=ap`，不会自动切换或断开网络。
+壁纸上传只存入图片库，`applyToLockScreen=true` 对 PageRest 返回 `Unsupported`。
 
 `accepts_any_upload_format` 表示上传接口是否接受任意扩展名；若为 false，使用
 `upload_extensions` 过滤。`readable_extensions` 表示设备原生阅读格式。
@@ -164,10 +215,13 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 
 `Transport` 仅为 SDK 内部 seam，负责 HTTP、WebSocket、流式请求体、超时和
 取消。它不决定设备能力、文件位置或上传策略，也不通过 UniFFI 暴露。
+WebSocket transport 只建立连接并收发原始消息；端口、握手、进度和设备错误消息由
+相应 adapter 处理。请求是否包含敏感信息由 adapter 标记，transport 按通用标记隐藏调试输出。
 
 文件位置和协议差异由对应 adapter 处理：
 
 - `ReadPicoAdapter`：仅接受 `Root`。
+- `PageRestAdapter`：图书仅接受 `Root`；字体和图片库通过各自的独立管理 API 列出，不暴露为通用文件目录。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
 - `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
 - `KiikoReadAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
@@ -184,7 +238,7 @@ Read Pico 的 `Root` 表示固件当前选择的上传存储根。CrossPoint 的
 `deleteWallpaper`。
 
 实际建立连接时应调用 UniFFI 的 `connectAndVerify`。该入口按所选设备类型验证设备：
-Read Pico 与 KiikoRead 固件检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
+Read Pico、KiikoRead 固件和 PageRest 检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
 读取根目录 `/api/list?path=/`，JustRead 读取根目录并处理访问码挑战。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
 同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
 

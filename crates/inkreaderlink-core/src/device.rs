@@ -5,9 +5,14 @@ use crate::{
 
 pub const READ_PICO_DEVICE_TYPE: &str = "read-pico";
 pub const CROSSPOINT_DEVICE_TYPE: &str = "crosspoint";
+pub const CROSSMUX_DEVICE_TYPE: &str = "crossmux";
+pub const RICKYOS_DEVICE_TYPE: &str = "rickyos";
+pub const IF_INK_OS_DEVICE_TYPE: &str = "if-ink-os";
 pub const WHITEOS_DEVICE_TYPE: &str = "whiteos";
 pub const KIIKOREAD_DEVICE_TYPE: &str = "kiikoread";
 pub const JUSTREAD_DEVICE_TYPE: &str = "justread";
+pub const PICO_PAGE_DEVICE_TYPE: &str = "pico-page";
+pub const PAGEREST_DEVICE_TYPE: &str = "pagerest";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceIdentity {
@@ -24,6 +29,9 @@ pub enum DeviceKind {
     WhiteOs,
     KiikoRead,
     JustRead,
+    PicoPage,
+    IfInkOs,
+    PageRest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,10 +47,15 @@ pub struct DeviceProfile {
 pub fn route_device(device_type: &str) -> Option<DeviceKind> {
     match device_type {
         READ_PICO_DEVICE_TYPE => Some(DeviceKind::ReadPico),
-        CROSSPOINT_DEVICE_TYPE => Some(DeviceKind::CrossPoint),
+        CROSSPOINT_DEVICE_TYPE | CROSSMUX_DEVICE_TYPE | RICKYOS_DEVICE_TYPE => {
+            Some(DeviceKind::CrossPoint)
+        }
+        IF_INK_OS_DEVICE_TYPE => Some(DeviceKind::IfInkOs),
         WHITEOS_DEVICE_TYPE => Some(DeviceKind::WhiteOs),
         KIIKOREAD_DEVICE_TYPE => Some(DeviceKind::KiikoRead),
         JUSTREAD_DEVICE_TYPE => Some(DeviceKind::JustRead),
+        PICO_PAGE_DEVICE_TYPE => Some(DeviceKind::PicoPage),
+        PAGEREST_DEVICE_TYPE => Some(DeviceKind::PageRest),
         _ => None,
     }
 }
@@ -81,69 +94,6 @@ mod tests {
         assert_eq!(route_device("read-pico"), Some(DeviceKind::ReadPico));
         assert_eq!(route_device("crosspoint"), Some(DeviceKind::CrossPoint));
         assert_eq!(route_device("future-reader"), None);
-    }
-
-    #[test]
-    fn crosspoint_declares_optional_file_management_capabilities() {
-        let profile = DeviceProfile::baseline(DeviceKind::CrossPoint);
-        let ids: Vec<_> = profile.capabilities.iter().map(Capability::id).collect();
-
-        assert!(ids.contains(&ids::FILE_UPLOAD));
-        assert!(ids.contains(&ids::FILE_RENAME));
-        assert!(ids.contains(&ids::UPLOAD_WEBSOCKET));
-        assert!(ids.contains(&ids::FONTS_LIST));
-        assert!(ids.contains(&ids::FONTS_UPLOAD));
-        assert!(ids.contains(&ids::FONTS_DELETE));
-        assert!(ids.contains(&ids::OPDS_LIST));
-        assert!(ids.contains(&ids::OPDS_SAVE));
-        assert!(ids.contains(&ids::OPDS_DELETE));
-        assert!(ids.contains(&ids::SETTINGS_LIST));
-        assert!(ids.contains(&ids::SETTINGS_UPDATE));
-        assert!(profile.constraints.can_list_directories);
-        assert!(profile.constraints.can_choose_upload_directory);
-        assert!(profile.file_formats.accepts_any_upload_format);
-        assert_eq!(profile.file_formats.font_upload_extensions, ["cpfont"]);
-        assert!(
-            profile
-                .file_formats
-                .readable_extensions
-                .contains(&"xtc".to_owned())
-        );
-    }
-
-    #[test]
-    fn read_pico_restricts_file_operations_to_its_active_root() {
-        let profile = DeviceProfile::baseline(DeviceKind::ReadPico);
-
-        assert!(!profile.constraints.can_list_directories);
-        assert!(!profile.constraints.can_choose_upload_directory);
-        assert!(!profile.file_formats.accepts_any_upload_format);
-        assert_eq!(profile.file_formats.upload_extensions, ["epub", "txt"]);
-        assert_eq!(profile.file_formats.font_upload_extensions, ["ttf"]);
-        assert!(
-            profile
-                .capabilities
-                .iter()
-                .any(|capability| capability.id() == ids::FONTS_UPLOAD)
-        );
-        assert!(
-            !profile
-                .capabilities
-                .iter()
-                .any(|capability| capability.id() == ids::FONTS_LIST)
-        );
-        assert!(
-            !profile
-                .capabilities
-                .iter()
-                .any(|capability| capability.id() == ids::OPDS_LIST)
-        );
-        assert!(
-            !profile
-                .capabilities
-                .iter()
-                .any(|capability| capability.id() == ids::SETTINGS_LIST)
-        );
     }
 
     #[test]

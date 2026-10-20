@@ -313,3 +313,10 @@ mod tests {
         assert!(matches!(request.body, HttpBody::RawFile { .. }));
     }
 }
+
+pub(crate) mod session;
+
+pub(crate) mod definition;
+
+#[cfg(test)]
+mod session_tests;

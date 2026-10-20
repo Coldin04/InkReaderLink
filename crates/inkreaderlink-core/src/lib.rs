@@ -6,6 +6,7 @@ mod device;
 pub mod model;
 pub mod settings;
 pub mod transport;
+mod validation;
 
 pub use capability::Capability;
 pub use client::DeviceClient;
@@ -19,3 +20,9 @@ pub use model::{
     SettingsSnapshot, SettingsValidationPolicy, UploadOptions, UploadProgressSink, UploadResult,
     WallpaperUploadResult, WifiCredential, WifiNetwork,
 };
+
+#[cfg(test)]
+mod client_tests;
+
+#[cfg(test)]
+mod test_support;

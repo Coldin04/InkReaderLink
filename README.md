@@ -12,15 +12,18 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 - [Read Pico 官方固件](https://github.com/MindReset/read_pico_firmware)
 - [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)
-- [CrossMux](https://github.com/0x1abin/crossmux) (请使用CrossPoint适配器)
-- [RickyOS](http://chinoryunqin.github.io/RickyOS-site) (请使用CrossPoint适配器)
+- [CrossMux](https://github.com/0x1abin/crossmux)
+- [RickyOS](http://chinoryunqin.github.io/RickyOS-site)
 - [KiikoRead](https://github.com/wegooo-cell/read-pico-reader)
+- [if-ink OS](https://github.com/yiifanrecyclable/if-ink-OS)
 - [WhiteOS](https://446599.github.io/whiteos/)
-- [JustRead（实验性）](https://flasher.smn.icu/)
+- [JustRead](https://flasher.smn.icu/)
+- Pico Page
+- PageRest
 
 ## 当前目标
 
-- 支持 Read Pico、CrossPoint、WhiteOS、KiikoRead 和 JustRead 固件。
+- 支持 Read Pico、CrossPoint、CrossMux、RickyOS、WhiteOS、KiikoRead、if-ink OS、JustRead、Pico Page 和 PageRest 固件。
 - 支持横向增加其他设备和固件。
 - 新增设备且不增加通用能力时，不要求上层修改调用代码。
 - WebDAV、mDNS 等高阶能力暂不作为首版目标。
@@ -33,20 +36,35 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 │   ├── inkreaderlink-core/
 │   │   └── src/
 │   │       ├── adapters/
-│   │       │   ├── crosspoint.rs  # CrossPoint 协议 adapter
-│   │       │   ├── justread.rs    # JustRead 文件传输 adapter
-│   │       │   ├── read_pico.rs   # Read Pico 协议 adapter
-│   │       │   ├── whiteos.rs     # WhiteOS HTTP 文件 API adapter
-│   │       │   └── mod.rs
+│   │       │   ├── contract.rs    # 统一操作接口与类型化参数
+│   │       │   ├── crosspoint/    # 请求、会话、备份恢复、WebSocket 与设置
+│   │       │   ├── crossmux/      # 共用 CrossPoint 协议的设备定义
+│   │       │   ├── rickyos/       # 共用 CrossPoint 协议的设备定义
+│   │       │   ├── if_ink_os/     # if-ink OS 专属流程与显式协议复用
+│   │       │   ├── kiikoread/     # KiikoRead 请求、分页与上传流程
+│   │       │   ├── justread/      # JustRead 会话认证与文件传输
+│   │       │   ├── pagerest/      # PageRest 预检查、媒体与 Wi-Fi 管理
+│   │       │   ├── pico_page/     # Pico Page 地址认证与上传握手
+│   │       │   ├── read_pico/     # Read Pico 请求、分页与部分成功语义
+│   │       │   ├── whiteos/       # WhiteOS HTTP 文件 API
+│   │       │   └── mod.rs         # adapter 工厂
 │   │       ├── capability.rs      # 能力声明模型
-│   │       ├── config.rs          # 支持设备、连接字段、能力、约束和格式配置
-│   │       ├── client.rs          # 统一设备操作与 capability 门控
+│   │       ├── config.rs          # 通用设备定义模型与设备注册
+│   │       ├── client.rs          # 通用校验、capability 门控、串行化与委派
 │   │       ├── device.rs          # 设备类型与路由
 │   │       ├── model.rs           # 通用文件、上传和错误模型
 │   │       ├── transport.rs       # 流式 HTTP/WebSocket transport
 │   │       └── lib.rs
 │   └── inkreaderlink-uniffi/
-│       └── src/lib.rs             # 核心到 UniFFI API 的映射
+│       └── src/
+│           ├── models/            # 按能力拆分的模型映射
+│           ├── client/            # 按能力拆分的操作导出
+│           ├── connection.rs      # 声明式连接参数
+│           ├── runtime.rs         # 异步运行时桥接
+│           ├── error.rs           # 统一错误映射
+│           ├── progress.rs        # 进度观察者映射
+│           ├── sdk.rs             # SDK 目录与版本入口
+│           └── lib.rs             # 模块重导出与 scaffolding
 ├── docs/
 │   ├── research/                  # 上游协议与技术选型调研
 │   └── sdk/                       # SDK 对外接口约定
@@ -67,8 +85,9 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 
 ## 开发状态
 
-当前提供 Read Pico、CrossPoint、WhiteOS、KiikoRead 与 JustRead 固件的文件管理；Wi-Fi、字体、
-OPDS 服务器、壁纸和动态设置等能力按固件声明开放，具体见 [SDK 接口文档](docs/sdk/interface.md)。
+当前提供 Read Pico、CrossPoint、WhiteOS、KiikoRead、if-ink OS 与 JustRead 固件的文件管理，以及
+Pico Page 的文件上传和 PageRest 的图书、字体、壁纸与 Wi-Fi 管理；Wi-Fi、字体、OPDS 服务器、壁纸和动态设置等能力按固件声明开放，具体见
+[SDK 接口文档](docs/sdk/interface.md)。
 
 Android/iOS 上层通过 `BooksendSdk.supportedDevices()` 查询支持的固件名称及连接表单字段，
 按 SDK 声明动态渲染文本框、密码框、地址框、下拉列表或开关。新增设备时，应在 `DeviceDefinition`

@@ -404,3 +404,10 @@ mod tests {
         assert_eq!(page.entries[0].kind, FileKind::Other);
     }
 }
+
+pub(crate) mod session;
+
+pub(crate) mod definition;
+
+#[cfg(test)]
+mod session_tests;

@@ -1,8 +1,8 @@
 //! Built-in device declarations and configurable device definitions.
 
 use crate::{
-    Capability, ConnectionFieldRetention, DeviceConnectionField, DeviceConnectionFieldKind,
-    DeviceConstraints, DeviceFileFormats, DeviceKind, DeviceResolution, capability::ids,
+    Capability, DeviceConnectionField, DeviceConstraints, DeviceFileFormats, DeviceKind,
+    DeviceResolution, capability::ids,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +79,9 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
         DeviceKind::WhiteOs => whiteos_definition(),
         DeviceKind::KiikoRead => kiikoread_definition(),
         DeviceKind::JustRead => justread_definition(),
+        DeviceKind::PicoPage => pico_page_definition(),
+        DeviceKind::IfInkOs => if_ink_os_definition(),
+        DeviceKind::PageRest => pagerest_definition(),
     }
 }
 
@@ -87,198 +90,29 @@ pub fn built_in_definitions() -> Vec<DeviceDefinition> {
     vec![
         read_pico_definition(),
         crosspoint_definition(),
+        crossmux_definition(),
+        rickyos_definition(),
+        if_ink_os_definition(),
         whiteos_definition(),
         kiikoread_definition(),
         justread_definition(),
+        pico_page_definition(),
+        pagerest_definition(),
     ]
 }
 
-#[must_use]
-pub fn read_pico_definition() -> DeviceDefinition {
-    DeviceDefinition::upload_only(
-        "read-pico",
-        DeviceFileFormats {
-            accepts_any_upload_format: false,
-            upload_extensions: extensions(&["epub", "txt"]),
-            font_upload_extensions: extensions(&["ttf"]),
-            wallpaper_upload_extensions: Vec::new(),
-            readable_extensions: extensions(&["epub", "txt"]),
-        },
-    )
-    .with_display_name("Read Pico")
-    .with_display_resolution(684, 1216)
-    .with_connection_field(DeviceConnectionField {
-        key: "address".to_owned(),
-        label: "设备地址".to_owned(),
-        kind: DeviceConnectionFieldKind::Address,
-        required: true,
-        retention: ConnectionFieldRetention::AppManaged,
-    })
-    .with_capability(ids::DEVICE_INFO)
-    .with_capability(ids::FILE_LIST)
-    .with_capability(ids::FILE_DELETE)
-    .with_capability(ids::UPLOAD_EXPLICIT_OVERWRITE)
-    .with_capability(ids::FONTS_UPLOAD_PROGRESS)
-    .with_capability(ids::WIFI_LIST)
-    .with_capability(ids::WIFI_SAVE)
-    .with_capability(ids::WIFI_DELETE)
-    .with_capability(ids::FONTS_UPLOAD)
-}
+pub use crate::adapters::crossmux::definition::crossmux_definition;
+pub use crate::adapters::crosspoint::definition::crosspoint_definition;
+pub use crate::adapters::if_ink_os::definition::if_ink_os_definition;
+pub use crate::adapters::justread::definition::justread_definition;
+pub use crate::adapters::kiikoread::definition::kiikoread_definition;
+pub use crate::adapters::pagerest::definition::pagerest_definition;
+pub use crate::adapters::pico_page::definition::pico_page_definition;
+pub use crate::adapters::read_pico::definition::read_pico_definition;
+pub use crate::adapters::rickyos::definition::rickyos_definition;
+pub use crate::adapters::whiteos::definition::whiteos_definition;
 
-#[must_use]
-pub fn crosspoint_definition() -> DeviceDefinition {
-    let mut definition = DeviceDefinition::upload_only(
-        "crosspoint",
-        DeviceFileFormats {
-            accepts_any_upload_format: true,
-            upload_extensions: Vec::new(),
-            font_upload_extensions: extensions(&["cpfont"]),
-            wallpaper_upload_extensions: Vec::new(),
-            readable_extensions: extensions(&["epub", "txt", "md", "xtc"]),
-        },
-    )
-    .with_display_name("CrossPoint")
-    .with_connection_field(DeviceConnectionField {
-        key: "address".to_owned(),
-        label: "设备地址".to_owned(),
-        kind: DeviceConnectionFieldKind::Address,
-        required: true,
-        retention: ConnectionFieldRetention::AppManaged,
-    })
-    .with_capability(ids::DEVICE_INFO)
-    .with_capability(ids::FILE_LIST)
-    .with_capability(ids::FILE_DIRECTORY_LIST)
-    .with_capability(ids::UPLOAD_DIRECTORY_TARGET)
-    .with_capability(ids::FILE_DELETE)
-    .with_capability(ids::FILE_DOWNLOAD)
-    .with_capability(ids::FILE_RENAME)
-    .with_capability(ids::FILE_MOVE)
-    .with_capability(ids::DIRECTORY_CREATE)
-    .with_capability(ids::UPLOAD_BACKUP_REPLACE)
-    .with_capability(ids::UPLOAD_WEBSOCKET)
-    .with_capability(ids::WIFI_LIST)
-    .with_capability(ids::WIFI_SAVE)
-    .with_capability(ids::WIFI_DELETE)
-    .with_capability(ids::FONTS_LIST)
-    .with_capability(ids::FONTS_UPLOAD)
-    .with_capability(ids::FONTS_UPLOAD_FAMILY)
-    .with_capability(ids::FONTS_DELETE)
-    .with_capability(ids::OPDS_LIST)
-    .with_capability(ids::OPDS_SAVE)
-    .with_capability(ids::OPDS_DELETE)
-    .with_capability(ids::SETTINGS_LIST)
-    .with_capability(ids::SETTINGS_UPDATE);
-    definition.constraints.can_list_directories = true;
-    definition.constraints.can_choose_upload_directory = true;
-    definition
-}
-
-#[must_use]
-pub fn whiteos_definition() -> DeviceDefinition {
-    let mut definition = DeviceDefinition::upload_only(
-        "whiteos",
-        DeviceFileFormats {
-            accepts_any_upload_format: true,
-            upload_extensions: Vec::new(),
-            font_upload_extensions: Vec::new(),
-            wallpaper_upload_extensions: Vec::new(),
-            readable_extensions: extensions(&["txt", "epub", "pdf"]),
-        },
-    )
-    .with_display_name("whiteos")
-    .with_connection_field(DeviceConnectionField {
-        key: "address".to_owned(),
-        label: "设备地址".to_owned(),
-        kind: DeviceConnectionFieldKind::Address,
-        required: true,
-        retention: ConnectionFieldRetention::AppManaged,
-    })
-    .with_capability(ids::FILE_LIST)
-    .with_capability(ids::FILE_DIRECTORY_LIST)
-    .with_capability(ids::UPLOAD_DIRECTORY_TARGET)
-    .with_capability(ids::FILE_DELETE)
-    .with_capability(ids::FILE_DOWNLOAD)
-    .with_capability(ids::FILE_RENAME)
-    .with_capability(ids::DIRECTORY_CREATE);
-    definition.constraints.can_list_directories = true;
-    definition.constraints.can_choose_upload_directory = true;
-    definition
-}
-
-#[must_use]
-pub fn kiikoread_definition() -> DeviceDefinition {
-    let mut definition = DeviceDefinition::upload_only(
-        "kiikoread",
-        DeviceFileFormats {
-            accepts_any_upload_format: false,
-            upload_extensions: extensions(&["epub", "txt"]),
-            font_upload_extensions: extensions(&["ttf", "otf"]),
-            wallpaper_upload_extensions: extensions(&["jpg", "jpeg", "png"]),
-            readable_extensions: extensions(&["epub", "txt"]),
-        },
-    )
-    .with_display_name("KiikoRead")
-    .with_display_resolution(684, 1216)
-    .with_connection_field(DeviceConnectionField {
-        key: "address".to_owned(),
-        label: "设备地址".to_owned(),
-        kind: DeviceConnectionFieldKind::Address,
-        required: true,
-        retention: ConnectionFieldRetention::AppManaged,
-    })
-    .with_capability(ids::DEVICE_INFO)
-    .with_capability(ids::FILE_LIST)
-    .with_capability(ids::FILE_DIRECTORY_LIST)
-    .with_capability(ids::FILE_DELETE)
-    .with_capability(ids::UPLOAD_EXPLICIT_OVERWRITE)
-    .with_capability(ids::FONTS_UPLOAD)
-    .with_capability(ids::WIFI_LIST)
-    .with_capability(ids::WIFI_SAVE)
-    .with_capability(ids::WIFI_DELETE)
-    .with_capability(ids::WALLPAPERS_UPLOAD)
-    .with_capability(ids::WALLPAPERS_MANAGE)
-    .with_capability(ids::WALLPAPERS_DELETE);
-    definition.constraints.can_list_directories = true;
-    definition
-}
-
-#[must_use]
-pub fn justread_definition() -> DeviceDefinition {
-    let mut definition = DeviceDefinition::upload_only(
-        "justread",
-        DeviceFileFormats {
-            accepts_any_upload_format: true,
-            upload_extensions: Vec::new(),
-            font_upload_extensions: Vec::new(),
-            wallpaper_upload_extensions: Vec::new(),
-            readable_extensions: extensions(&["epub", "txt"]),
-        },
-    )
-    .with_display_name("JustRead(实验性)")
-    .with_connection_field(DeviceConnectionField {
-        key: "address".to_owned(),
-        label: "设备地址".to_owned(),
-        kind: DeviceConnectionFieldKind::Address,
-        required: true,
-        retention: ConnectionFieldRetention::AppManaged,
-    })
-    .with_connection_field(DeviceConnectionField {
-        key: "access_code".to_owned(),
-        label: "设备访问码".to_owned(),
-        kind: DeviceConnectionFieldKind::Secret,
-        required: false,
-        retention: ConnectionFieldRetention::Session,
-    })
-    .with_capability(ids::FILE_LIST)
-    .with_capability(ids::FILE_DIRECTORY_LIST)
-    .with_capability(ids::UPLOAD_DIRECTORY_TARGET)
-    .with_capability(ids::FILE_DOWNLOAD);
-    definition.constraints.can_list_directories = true;
-    definition.constraints.can_choose_upload_directory = true;
-    definition
-}
-
-fn extensions(values: &[&str]) -> Vec<String> {
+pub(crate) fn extensions(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
@@ -302,35 +136,5 @@ mod tests {
         let capability_ids: Vec<_> = definition.capabilities.iter().map(Capability::id).collect();
         assert_eq!(capability_ids, [ids::FILE_UPLOAD]);
         assert!(!definition.constraints.can_list_directories);
-    }
-
-    #[test]
-    fn whiteos_definition_declares_its_file_management_capabilities() {
-        let definition = whiteos_definition();
-        let capability_ids: Vec<_> = definition.capabilities.iter().map(Capability::id).collect();
-
-        assert_eq!(definition.device_type, "whiteos");
-        assert_eq!(definition.display_name, "whiteos");
-        for required in [
-            ids::FILE_UPLOAD,
-            ids::FILE_LIST,
-            ids::FILE_DIRECTORY_LIST,
-            ids::UPLOAD_DIRECTORY_TARGET,
-            ids::FILE_DELETE,
-            ids::FILE_DOWNLOAD,
-            ids::FILE_RENAME,
-            ids::DIRECTORY_CREATE,
-        ] {
-            assert!(capability_ids.contains(&required));
-        }
-        assert!(definition.file_formats.accepts_any_upload_format);
-        assert_eq!(
-            definition.file_formats.upload_extensions,
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            definition.file_formats.readable_extensions,
-            vec!["txt".to_owned(), "epub".to_owned(), "pdf".to_owned()]
-        );
     }
 }

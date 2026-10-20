@@ -248,4 +248,22 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn upload_uses_raw_put_and_remote_path_query() {
+        let request =
+            WhiteOsAdapter::upload_request(PathBuf::from("book.epub"), "/中文 book.epub", None);
+        assert_eq!(request.method, HttpMethod::Put);
+        assert_eq!(request.path, "/api/upload");
+        assert_eq!(
+            request.query,
+            vec![("path".to_owned(), "/中文 book.epub".to_owned())]
+        );
+    }
 }
+
+pub(crate) mod session;
+
+pub(crate) mod definition;
+
+#[cfg(test)]
+mod session_tests;
