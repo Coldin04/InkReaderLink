@@ -82,6 +82,7 @@ pub fn built_in_definition(kind: DeviceKind) -> DeviceDefinition {
         DeviceKind::PicoPage => pico_page_definition(),
         DeviceKind::IfInkOs => if_ink_os_definition(),
         DeviceKind::PageRest => pagerest_definition(),
+        DeviceKind::FolioBook => foliobook_definition(),
     }
 }
 
@@ -98,11 +99,13 @@ pub fn built_in_definitions() -> Vec<DeviceDefinition> {
         kiikoread_definition(),
         pico_page_definition(),
         pagerest_definition(),
+        foliobook_definition(),
     ]
 }
 
 pub use crate::adapters::crossmux::definition::crossmux_definition;
 pub use crate::adapters::crosspoint::definition::crosspoint_definition;
+pub use crate::adapters::foliobook::definition::foliobook_definition;
 pub use crate::adapters::if_ink_os::definition::if_ink_os_definition;
 pub use crate::adapters::justread::definition::justread_definition;
 pub use crate::adapters::kiikoread::definition::kiikoread_definition;

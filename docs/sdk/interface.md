@@ -56,6 +56,10 @@ PageRest（`pagerest`）是独立固件类型，不能因网页标题出现“�
 它使用独立 adapter 和 PageRest 自己的图书分页、Wi-Fi 请求与响应解析；不使用 Pico Page 的访问码或 token。
 连接只需普通设备地址，不使用 URL 访问码或 `X-Pico-Token`；也不复用 Pico Page 的会话处理。
 
+FolioBook（`foliobook`，显示名 `FolioBook`）使用独立 adapter，仅声明 `files.upload`。
+连接字段只有必填设备地址 `address`，保存责任为 `AppManaged`。上层通过现有设备目录和
+统一上传 API 即可使用，无需增加固件专属调用。
+
 `SdkConnectionField` 以 `key` 标识值，包含显示标签 `label`、是否在初次提交时必填的
 `required`、输入类型 `kind` 和保存责任 `retention`：`Text` 渲染文本框，`Secret`
 渲染密码框，`Address` 渲染地址输入框并允许接入原生扫码，带 `options` 的 `Choice`
@@ -160,6 +164,16 @@ App 应只在 `DeviceProfile.capabilities` 包含此 ID 时显示信息页并调
 | if-ink OS | EPUB、TXT、Markdown | `.ttf`、`.otf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT、Markdown |
 | Pico Page | EPUB、TXT、TTF、OTF、PNG、JPEG | — | — | EPUB、TXT |
 | PageRest | EPUB、TXT | `.ttf` | `.jpg`、`.jpeg`、`.png` | EPUB、TXT |
+| FolioBook | 任意文件（包括 PDF） | — | — | 未确认，声明为空 |
+
+FolioBook 按提供的上传网页协议工作：每个文件只发送一次
+`POST /up?name=<URL 编码的文件名>`，请求体为原始文件流，支持统一上传进度回调。
+仅 HTTP 200 表示成功，其他状态返回含 HTTP 状态及设备正文的 `RemoteFailure`。
+传输失败直接返回网络错误，不自动重发，因为网页未提供上传结果核对接口。
+进度表示本地文件已交给 HTTP 请求体的字节数，保存成功以最终 HTTP 响应为准。
+网页未限制扩展名，因此允许 PDF 和其他文件上传；原生阅读格式尚未确认，
+`readable_extensions` 留空表示未知。字体、壁纸管理、目录选择、覆盖和备份替换未声明；
+默认冲突策略直接使用固件行为，SDK 无法预先检查同名文件，也不保证设备拒绝覆盖。
 
 Pico Page 提供一个上传接口；SDK 仅按定义中声明的扩展名接受文件，并将文件流发送至设备。
 设备负责决定文件保存位置和限制。SDK 在每个文件上传前重新读取已验证的传书页，从页面脚本提取
@@ -227,6 +241,7 @@ WebSocket transport 只建立连接并收发原始消息；端口、握手、进
 
 - `ReadPicoAdapter`：仅接受 `Root`。
 - `PageRestAdapter`：图书仅接受 `Root`；字体和图片库通过各自的独立管理 API 列出，不暴露为通用文件目录。
+- `FolioBookAdapter`：仅接受 `Root`，由固件决定存储卡中的保存位置。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
 - `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
 - `KiikoReadAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
@@ -246,6 +261,8 @@ WebSocket transport 只建立连接并收发原始消息；端口、握手、进
 Read Pico、KiikoRead 固件和 PageRest 检查 `/info`，CrossPoint 检查 `/api/status`，WhiteOS
 读取根目录 `/api/list?path=/`，JustRead 读取根目录并处理访问码挑战。只有 HTTP 请求成功且响应符合对应协议格式时才返回 client。
 同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
+FolioBook 通过 `GET /` 检查 `Folio Book` 网页标题与上传脚本标识，连接验证不会写入文件，
+也不依赖设备信息接口或会话凭据。
 
 每个调用先检查 profile 中的 capability，未声明时返回 `Unsupported`。文件上传
 和下载使用流式 I/O；修改操作在单个设备 client 内串行执行。

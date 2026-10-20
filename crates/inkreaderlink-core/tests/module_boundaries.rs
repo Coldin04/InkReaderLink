@@ -10,6 +10,9 @@ fn client_and_transport_do_not_depend_on_firmware_protocols() {
         "ACCESS_CODE",
         "/api/",
         "session_credentials:",
+        "FolioBook",
+        "foliobook",
+        "/up?name=",
     ] {
         assert!(
             !client.contains(forbidden),
@@ -24,6 +27,9 @@ fn client_and_transport_do_not_depend_on_firmware_protocols() {
         "X-Pico-Token",
         "X-Transfer-Token",
         "set_port(Some(81))",
+        "FolioBook",
+        "foliobook",
+        "/up?name=",
     ] {
         assert!(
             !transport.contains(forbidden),
