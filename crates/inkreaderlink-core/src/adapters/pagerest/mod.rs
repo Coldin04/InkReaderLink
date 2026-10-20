@@ -1,5 +1,5 @@
 //! `PageRest` API adapter. Its book listing, Wi-Fi policy, per-kind preflight,
-//! media roots, and upload reconciliation use PageRest's own wire contract.
+//! media roots, and upload reconciliation use `PageRest`'s own wire contract.
 
 use std::path::PathBuf;
 
