@@ -192,6 +192,15 @@ PageRest 的字体接口按单文件管理，现有 `FontCatalog` 模型以文�
 `/info.last_upload` 的序号、文件名、总字节数及错误状态；只有全部匹配时才显示设备错误，否则返回“结果未确认”。
 Wi-Fi 信息、保存和遗忘请求使用 PageRest 自己的 `/info` 与 `/wifi` 解析和序列化；保存/遗忘仅允许
 `mode=ap`，不会自动切换或断开网络。
+
+AuraReader 使用 `/info` 获取存储策略、当前热点/已连接 Wi-Fi 状态、字体可用性和阅读设置；
+`/books?page=N` 分页返回图书，SDK 在内部读取所有页。图书按 TXT/EPUB、字体按 TTF 声明，
+均逐个以原始文件体发送，不使用 multipart。上传前 SDK 检查剩余空间、单文件限制和同名文件，
+随后分别使用 `/upload` 或 `/fonts`；替换仅在调用方显式选择时附加 `overwrite=1`。
+字体上传仅在固件报告 `fonts_enabled` 时可用，固件没有字体列表或删除接口。
+AuraReader 的 Wi-Fi 信息来自 `/info` 单个已保存 SSID；保存和遗忘前重新检查 `mode=ap`，
+且不会自动断开热点。阅读设置由 `/info` 映射为通用设置快照，`/system` 接收带 `action=reading`
+的部分更新，成功后 SDK 重新读取快照。设备网页另有 RTC 同步和重启按钮，但目前没有对应通用 SDK 能力。
 壁纸上传只存入图片库，`applyToLockScreen=true` 对 PageRest 返回 `Unsupported`。
 PageRest 图片能力映射到 SDK 通用壁纸模型；HTTP 请求体进度代表本地文件已交给网络请求的字节数，设备确认保存仍以最终响应为准。
 取消 UniFFI 异步调用会中止对应 SDK 任务和正在进行的请求；若取消发生在设备已提交而响应尚未返回时，结果需从对应内容列表确认。
@@ -242,6 +251,7 @@ WebSocket transport 只建立连接并收发原始消息；端口、握手、进
 - `ReadPicoAdapter`：仅接受 `Root`。
 - `PageRestAdapter`：图书仅接受 `Root`；字体和图片库通过各自的独立管理 API 列出，不暴露为通用文件目录。
 - `FolioBookAdapter`：仅接受 `Root`，由固件决定存储卡中的保存位置。
+- `AuraReaderAdapter`：图书仅接受 `Root`，由固件报告的存储根生成列表路径；字体仅支持上传，不暴露为通用文件目录。
 - `CrossPointAdapter`：接受 `Root` 或 `Directory(path)`。
 - `WhiteOsAdapter`：接受 `Root` 或 `Directory(path)`；列表接口一次返回完整目录。
 - `KiikoReadAdapter`：接受 `Root` 或 `Directory(path)`；壁纸库列表固定读取 `pictures` 目录。
@@ -263,6 +273,7 @@ Read Pico、KiikoRead 固件和 PageRest 检查 `/info`，CrossPoint 检查 `/ap
 同步 `connect` 只创建 client，不代表设备已连接；WhiteOS 没有设备信息接口。
 FolioBook 通过 `GET /` 检查 `Folio Book` 网页标题与上传脚本标识，连接验证不会写入文件，
 也不依赖设备信息接口或会话凭据。
+AuraReader 通过读取并解析 `/info` 验证连接；该接口也提供设备信息与阅读设置当前值。
 
 每个调用先检查 profile 中的 capability，未声明时返回 `Unsupported`。文件上传
 和下载使用流式 I/O；修改操作在单个设备 client 内串行执行。

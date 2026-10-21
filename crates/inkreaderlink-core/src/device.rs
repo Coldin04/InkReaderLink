@@ -14,6 +14,7 @@ pub const JUSTREAD_DEVICE_TYPE: &str = "justread";
 pub const PICO_PAGE_DEVICE_TYPE: &str = "pico-page";
 pub const PAGEREST_DEVICE_TYPE: &str = "pagerest";
 pub const FOLIOBOOK_DEVICE_TYPE: &str = "foliobook";
+pub const AURAREADER_DEVICE_TYPE: &str = "aurareader";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceIdentity {
@@ -34,6 +35,7 @@ pub enum DeviceKind {
     IfInkOs,
     PageRest,
     FolioBook,
+    AuraReader,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +61,7 @@ pub fn route_device(device_type: &str) -> Option<DeviceKind> {
         PICO_PAGE_DEVICE_TYPE => Some(DeviceKind::PicoPage),
         PAGEREST_DEVICE_TYPE => Some(DeviceKind::PageRest),
         FOLIOBOOK_DEVICE_TYPE => Some(DeviceKind::FolioBook),
+        AURAREADER_DEVICE_TYPE => Some(DeviceKind::AuraReader),
         _ => None,
     }
 }

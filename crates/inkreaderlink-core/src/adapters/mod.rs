@@ -1,3 +1,4 @@
+pub mod aurareader;
 pub mod crossmux;
 pub mod crosspoint;
 pub mod foliobook;
@@ -36,5 +37,6 @@ pub(crate) fn create(
         DeviceKind::PicoPage => Box::new(pico_page::session::Session::new(transport)),
         DeviceKind::PageRest => Box::new(pagerest::session::Session::new(transport)),
         DeviceKind::FolioBook => Box::new(foliobook::session::Session::new(transport)),
+        DeviceKind::AuraReader => Box::new(aurareader::session::Session::new(transport)),
     }
 }

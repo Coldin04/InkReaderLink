@@ -21,10 +21,11 @@ InkReaderLink 是面向电子墨水阅读设备及兼容固件的设备桥接层
 - [Pico Page](https://picopage.wulu.zone/install/)
 - [PageRest](https://pico.gofree.kdns.fr/)
 - FolioBook（基于设备上传网页协议）
+- AuraReader（基于设备网页配置协议）
 
 ## 当前目标
 
-- 支持 JustRead、Read Pico、CrossPoint、CrossMux、RickyOS、WhiteOS、KiikoRead、if-ink OS、Pico Page、PageRest 和 FolioBook 固件。
+- 支持 JustRead、Read Pico、CrossPoint、CrossMux、RickyOS、WhiteOS、KiikoRead、if-ink OS、Pico Page、PageRest、FolioBook 和 AuraReader 固件。
 - 支持横向增加其他设备和固件。
 - 新增设备且不增加通用能力时，不要求上层修改调用代码。
 - WebDAV、mDNS 等高阶能力暂不作为首版目标。
