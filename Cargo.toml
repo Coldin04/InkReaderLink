@@ -13,6 +13,11 @@ authors = ["Coldin04"]
 repository = "https://github.com/Coldin04/InkReaderLink.git"
 rust-version = "1.85"
 
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
